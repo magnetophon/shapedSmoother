@@ -9,7 +9,7 @@ import("stdfaust.lib");
 /*
 
 
-
+MAYBE IT'S ALL CORRECT, AND THE ERROR IS FROM THE LACK OF LOOKAHEAD/HOLD???
 
 
 
@@ -29,15 +29,20 @@ import("stdfaust.lib");
 
 
 process(x) =
-  // shapedSmoother(test2:ba.slidingMax(att_hold_samples,maxHold*maxSR));
+  testSig,
   shapedSmoother(testSig);
+// test2@att_hold_samples,
+// shapedSmoother(test2:ba.slidingMax(att_hold_samples,maxHold*maxSR));
+
+// shapedSmoother(testSig);
 // shapedSmoother(x);
 
 
 
 shapedSmoother(x) =
-  x
- ,(x:att_env~(_,_))
+  // x@att_hold_samples
+  // ,
+  (x:att_env~(_,_))
   // , (x:crossfade~(_,_))
   // :(_,!)
   // :(_,targetCurve,targetCurve)
@@ -48,11 +53,14 @@ with {
   // , naivePhase
   att_env(prev,prevPhase,x) =
     select2(attacking,x,
-            (speed /totalNRSteps)+prev)
+            // (speed /totalNRSteps)+prev)
+            (speed *step)+prev)
     :min(x)
   , newPhase
     // , gonnaDo(newPhase)
-  , fullDif
+    // , fullDif
+    // , gonnaDo(0.5)
+  , totalStep
     // ,(((naivePhase/max(newPhase, ma.EPSILON))-1)*1*attacking)
 
   with {
@@ -93,19 +101,31 @@ with {
     -
     prev
   ;
-  fullDif = dif/(1-targetCurve(prevPhase
-                               // +(step*hslider("offset", 0.5, -10, 10, 0.001))
-                              ));
+  fullDif = (dif/(1-targetCurve(
+                     prevPhase
+                     // +(step*hslider("offset", 0.5, -1, 1, 0.001))
+                   )))
+            : ba.sAndH(x!=x')
+  ;
 
   // old_totalStep = (x-ba.sAndH(1-attacking,x));
   old_totalStep = (x-prevHold);
-  prevHold = ba.sAndH(1-attacking,x);
+  // prevHold = ba.sAndH(1-attacking,x);
+  prevHold = ba.sAndH(x>x',prev);
 
   totalStep =
     // old_totalStep;
-    select2(checkbox("old")
-           ,fullDif
-           , old_totalStep );
+
+    // select2(checkbox("old")
+    // ,fullDif
+    // ,
+    (x-prev)
+    : ba.sAndH(x!=x')
+
+      // old_totalStep
+      // , x
+      // )
+  ;
 
 
   speed = totalStep* targetDerivative(newPhase):hbargraph("shaper", 0, 2);
@@ -154,7 +174,6 @@ with {
      targetCurve(phase)
     )*
     totalStep
-    +prev
   ;
   /*
 
@@ -174,7 +193,7 @@ with {
   newPhase =
     // naivePhase ;
     truePhase;
-  truePhase = 
+  truePhase =
     (phaseAtMatchingSpeed
      // todo: don't blindly add a full step, but directly calculate the phase we need
      // at the moment we match the speed we had before and add a step, but we need to??
@@ -183,13 +202,20 @@ with {
      : max(0)
        * attacking)
     :min(1)
+     // :min(1-step)
      // (_ <: (_*(_<1)))
 
     :hbargraph("phase", 0, 1)
   ;
 
   totalNRSteps = att*ma.SR;
-  step = 1/(totalNRSteps);
+  // step = 1/(totalNRSteps);
+  step = (1/(totalNRSteps))
+         // * select2(checkbox("step")
+         // , 1
+         // , (x-prev)
+         // )
+  ;
   phaseAtMatchingSpeed =
     select2(
       gonnaMakeIt
@@ -197,21 +223,24 @@ with {
     , inverseTargetDerivativeTop(prev_speed/totalStep)
     );
   gonnaMakeIt =
-    gonnaDo(inverseTargetDerivativeTop(prev_speed/totalStep)
-           )>=x
+    gonnaDo(inverseTargetDerivativeTop(prev_speed/totalStep))
+    +prev
+
+    >=x
     // )
   ;
+
   // correctionFactor = (gonnaDo(phaseAtMatchingSpeed
   // +
   // hslider("bool", 0.5, -1, 1, 0.001)*
   // step)/x);
   // get the GRdelta we need to do this sample:
   // - get the whole nr of steps we will do besides this one
-  
+
 
   // - use that to get the phase
   //   - get the gain we want to be at after this step, so that a whole nr of steps will lead to exactly x
-  
+
   // phaseAfterThis = (prevPhase*totalNRSteps)+1:ceil/totalNRSteps;
   // gonnaDoAfterThis = gonnaDo(phaseAfterThis);
   // deltaXthisStep = prev - gonnaDoAfterThis;
