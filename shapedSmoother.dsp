@@ -42,7 +42,7 @@ process(x) =
 shapedSmoother(x) =
   // x@att_hold_samples
   // ,
-  (x:att_env~(_,_))
+  (x:att_env~(_,_,_))
   // , (x:crossfade~(_,_))
   // :(_,!)
   // :(_,targetCurve,targetCurve)
@@ -51,7 +51,7 @@ with {
   // crossfade(prev,prevPhase,x) =
   // it.interpolate_linear(naivePhase:targetCurve,prevHold,x)
   // , naivePhase
-  att_env(prev,prevPhase,x) =
+  att_env(prev,prevPhase,prevTotalStep,x) =
     select2(attacking,x,
             // (speed /totalNRSteps)+prev)
             (speed *step)+prev)
@@ -120,17 +120,21 @@ with {
     // ,fullDif
     // ,
     (x-prev)
+    :max(prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5))
     : ba.sAndH(x!=x')
 
       // old_totalStep
-      // , x
       // )
   ;
 
 
+  // newTotalStep * targetDerivative(0.5)  >=   prevTotalStep * targetDerivative(prevPhase)
+  // newTotalStep    >=   prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5)
+
+
   speed = totalStep* targetDerivative(newPhase):hbargraph("shaper", 0, 2);
-  prev_speed =
-    totalStep'* targetDerivative(prevPhase);
+  prevSpeed =
+    prevTotalStep * targetDerivative(prevPhase);
   //
   //
   //
@@ -219,11 +223,11 @@ with {
   phaseAtMatchingSpeed =
     select2(
       gonnaMakeIt
-    , inverseTargetDerivativeBottom(prev_speed/totalStep)
-    , inverseTargetDerivativeTop(prev_speed/totalStep)
+    , inverseTargetDerivativeBottom(prevSpeed/totalStep)
+    , inverseTargetDerivativeTop(prevSpeed/totalStep)
     );
   gonnaMakeIt =
-    gonnaDo(inverseTargetDerivativeTop(prev_speed/totalStep))
+    gonnaDo(inverseTargetDerivativeTop(prevSpeed/totalStep))
     +prev
 
     >=x
