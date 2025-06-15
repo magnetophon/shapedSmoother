@@ -77,50 +77,18 @@ with {
   // if we hold the peak they are not needed
   // if we use fullDif they might also not be needed
   inverseTargetDerivativeBottom(y) =
-    select2(y>0.5*ma.PI,
-            ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI)
-            , 0.5)
-  ;
+    ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI) ;
 
   inverseTargetDerivativeTop(y) =
-    select2(y>0.5*ma.PI,
-            (acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI
-            , 0.5)
-  ;
+    (acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI ;
 
 
   attacking = (prev<x)*(att>0);
 
   totalStep =
     (x-prev)
-    // make sure sthe speed ends up high enough to match the previous speed:
-
-    :max(prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5))
-
-     // select2( (prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5)) > (x-prev) : ba.sAndH(x!=x')'
-     // , (x-prev) : ba.sAndH(x!=x')
-     // ,max((prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5)) , (x-prev) : ba.sAndH(x!=x')) : max ((x-prev) : ba.sAndH(x!=x')')
-     // )
-
-     // make sure the speed ends up high enough to reach the end of the curve:
-     // what we need to do is:
-     // :max((x - prev) / (1- targetCurve(newPhase)))
-     // but we can't cause newPhase depends on totalStep
-
-
-    : ba.sAndH(x!=x')
-
     : max(prevTotalStep)
-      * attacking
-
-      // : max((x - prev) / (1- targetCurve(prevPhase+step)))
-
-      // :max(prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5))
-  ;
-
-  // newTotalStep * targetDerivative(0.5)  >=   prevTotalStep * targetDerivative(prevPhase)
-  // newTotalStep    >=   prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5)
-  //  >=     prevTotalStep * targetDerivative(prevPhase+step)
+      * attacking;
 
 
   speed = totalStep* targetDerivative(newPhase)
@@ -283,7 +251,7 @@ test2 =
 
   )
 with {
-  loop(prev,x) = no.lfnoise0(abs(prev*69)%9:pow(0.75)*5+1);
+  loop(prev) = no.lfnoise0(abs(prev*69)%9:pow(0.75)*5+1);
 };
 testSig = os.lf_sawpos(0.5)<:(
   ((_>0.25)*hslider("step1", 0.75, -1, 1, 0.001))
