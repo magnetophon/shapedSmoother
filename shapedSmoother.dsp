@@ -29,10 +29,10 @@ MAYBE IT'S ALL CORRECT, AND THE ERROR IS FROM THE LACK OF LOOKAHEAD/HOLD???
 
 
 process(x) =
-  testSig,
-  shapedSmoother(testSig);
-// test2@att_hold_samples,
-// shapedSmoother(test2:ba.slidingMax(att_hold_samples,maxHold*maxSR));
+  // testSig,
+  // shapedSmoother(testSig);
+  test2@att_samples,
+  shapedSmoother(test2:ba.slidingMax(att_samples,maxHold*maxSR));
 
 // shapedSmoother(testSig);
 // shapedSmoother(x);
@@ -40,7 +40,7 @@ process(x) =
 
 
 shapedSmoother(x) =
-  // x@att_hold_samples
+  // x@att_samples
   // ,
   (x:att_env~(_,_,_))
   // , (x:crossfade~(_,_))
@@ -61,6 +61,8 @@ with {
     // , fullDif
     // , gonnaDo(0.5)
   , totalStep
+    // , xAtEndOfcurve
+    // ,gonnaMakeIt
     // ,(((naivePhase/max(newPhase, ma.EPSILON))-1)*1*attacking)
 
   with {
@@ -88,53 +90,44 @@ with {
 
 
   attacking = (prev<x)*(att>0);
-  start_attack = (attacking-attacking'):max(0);
-  naivePhase =
-    ((_+step)*(1-start_attack):min(1))~_ *attacking;
-
-
-
-
-  // hold = ba.slidingMax(att_hold_samples,maxHold*maxSR,x);
-  dif =
-    x
-    -
-    prev
-  ;
-  fullDif = (dif/(1-targetCurve(
-                     prevPhase
-                     // +(step*hslider("offset", 0.5, -1, 1, 0.001))
-                   )))
-            : ba.sAndH(x!=x')
-  ;
-
-  // old_totalStep = (x-ba.sAndH(1-attacking,x));
-  old_totalStep = (x-prevHold);
-  // prevHold = ba.sAndH(1-attacking,x);
-  prevHold = ba.sAndH(x>x',prev);
 
   totalStep =
-    // old_totalStep;
-
-    // select2(checkbox("old")
-    // ,fullDif
-    // ,
     (x-prev)
+    // make sure sthe speed ends up high enough to match the previous speed:
+
     :max(prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5))
+
+     // select2( (prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5)) > (x-prev) : ba.sAndH(x!=x')'
+     // , (x-prev) : ba.sAndH(x!=x')
+     // ,max((prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5)) , (x-prev) : ba.sAndH(x!=x')) : max ((x-prev) : ba.sAndH(x!=x')')
+     // )
+
+     // make sure the speed ends up high enough to reach the end of the curve:
+     // what we need to do is:
+     // :max((x - prev) / (1- targetCurve(newPhase)))
+     // but we can't cause newPhase depends on totalStep
+
+
     : ba.sAndH(x!=x')
 
-      // old_totalStep
-      // )
-  ;
+    : max(prevTotalStep)
+      * attacking
 
+      // : max((x - prev) / (1- targetCurve(prevPhase+step)))
+
+      // :max(prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5))
+  ;
 
   // newTotalStep * targetDerivative(0.5)  >=   prevTotalStep * targetDerivative(prevPhase)
   // newTotalStep    >=   prevTotalStep * targetDerivative(prevPhase) / targetDerivative(0.5)
+  //  >=     prevTotalStep * targetDerivative(prevPhase+step)
 
 
-  speed = totalStep* targetDerivative(newPhase):hbargraph("shaper", 0, 2);
+  speed = totalStep* targetDerivative(newPhase)
+          // :hbargraph("shaper", 0, 2)
+  ;
   prevSpeed =
-    prevTotalStep * targetDerivative(prevPhase);
+    prevTotalStep * targetDerivative(prevPhase+step);
   //
   //
   //
@@ -194,45 +187,46 @@ with {
 
  */
 
+
+  // xAtEndOfcurve = (1- targetCurve(newPhase(totalStep)))* totalStep + prev;
+  // (1- targetCurve(newPhase))* totalStep + prev = x
+  // (1- targetCurve(newPhase))* totalStep  = (x - prev)
+  // totalStep  = (x - prev) / (1- targetCurve(newPhase))
+
   newPhase =
-    // naivePhase ;
-    truePhase;
-  truePhase =
     (phaseAtMatchingSpeed
      // todo: don't blindly add a full step, but directly calculate the phase we need
      // at the moment we match the speed we had before and add a step, but we need to??
      // +thisStep
-     +step
+     // +step
      : max(0)
-       * attacking)
+       * attacking
+    )
     :min(1)
      // :min(1-step)
      // (_ <: (_*(_<1)))
 
-    :hbargraph("phase", 0, 1)
-  ;
+     // :hbargraph("phase", 0, 1)
+  with {
+    phaseAtMatchingSpeed =
+      select2(
+        gonnaMakeIt
+      , inverseTargetDerivativeBottom(prevSpeed/totalStep)
+      , inverseTargetDerivativeTop(prevSpeed/totalStep)
+      );
+    gonnaMakeIt =
+      gonnaDo(inverseTargetDerivativeTop(prevSpeed/totalStep))
+      +prev
+
+      >=x
+      // )
+    ;
+  };
+
 
   totalNRSteps = att*ma.SR;
   // step = 1/(totalNRSteps);
-  step = (1/(totalNRSteps))
-         // * select2(checkbox("step")
-         // , 1
-         // , (x-prev)
-         // )
-  ;
-  phaseAtMatchingSpeed =
-    select2(
-      gonnaMakeIt
-    , inverseTargetDerivativeBottom(prevSpeed/totalStep)
-    , inverseTargetDerivativeTop(prevSpeed/totalStep)
-    );
-  gonnaMakeIt =
-    gonnaDo(inverseTargetDerivativeTop(prevSpeed/totalStep))
-    +prev
-
-    >=x
-    // )
-  ;
+  step = (1/(totalNRSteps));
 
   // correctionFactor = (gonnaDo(phaseAtMatchingSpeed
   // +
@@ -273,13 +267,21 @@ with {
 };
 maxHold = 2;
 maxSR = 192000;
+// maxSR = 48000;
 
-att = hslider("att[scale:log]", 0.52, 0.0001, maxHold, 0.001)-0.0001;
+att = hslider("att[scale:log]", 0.2, 0.0001, maxHold, 0.001)-0.0001;
 att_hold = att*hslider("att hold factor", 1, 0, 1, 0.001) ;
 att_hold_samples = att_hold *ma.SR:max(1);
+att_samples = att *ma.SR:max(1);
 
 test2 =
-  (loop~_)
+  it.interpolate_linear(
+    hslider("noise level", 0, 0, 1, 0.001),
+    (loop~_)
+    ,
+      no.lfnoise(hslider("noise rate", 42, 1, 1000, 1))
+
+  )
 with {
   loop(prev,x) = no.lfnoise0(abs(prev*69)%9:pow(0.75)*5+1);
 };
