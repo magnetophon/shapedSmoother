@@ -20,7 +20,33 @@ import("stdfaust.lib");
 
 
 process =
-  invert_dwsdx_bottom(2.45, 0.3);
+  (dwsdx_bisection_inverse(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top"))
+   :hbargraph("[1]x bisect", 0, 1)
+   : dwsdx(c):hbargraph("[2]new y bisect", 0, 2.95))
+  // ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
+  // : dwsdx(c):hbargraph("[4]new y N-R", 0, 2.95))
+
+  // (max_dwsdx(c):vbargraph("max val grid[unit:dB]", 0, 3))
+  // ,
+  // (ternary_search_max(dwsdx,c,0,1):vbargraph("max val ternary[unit:dB]", 0, 3))
+  // ,
+  // (golden_section_search_max(dwsdx,c,0,1):vbargraph("max val golden[unit:dB]", 0, 3))
+;
+c =
+  hslider("c", 0.001, 0.001, 3, 0.001)
+  // * -1
+;
+// shape2c(shapeSlider);
+// TODO: curve the slider, like in lamb
+shape2c(slider) =
+  slider
+  /nrShapes
+  * maxShape
+  + 0.001
+;
+shapeSlider = hslider("shape", 0, 0, nrShapes, 1):int;
+nrShapes = 16;
+maxShape = 3;
 
 // testSig,
 // shapedSmoother(testSig);
@@ -197,6 +223,7 @@ newCurve(releasing,c,x) =
 // https://www.desmos.com/calculator/icpnkuebe9
 
 
+// warp
 f(k, x)      = (1 - exp(k * x)) / (1 - exp(k));
 dfdx(k, x)   = -k * exp(k * x) / (1 - exp(k));
 second_dfdx(k, x)   = pow(-k,2) * exp(k * x) / (1 - exp(k));
@@ -215,39 +242,189 @@ second_dwsdx(c, x) =
   second_dsdp(f(c, x)) * pow(dfdx(c, x), 2)
   + dsdp(f(c, x)) * second_dfdx(c, x);
 
-max_iter = 3;
+// max_iter = 800;
+max_iter = 80;
 // # Newton-Raphson solver
-invert_dwsdx_bottom(c, y_target) =
+invert_dwsdx(c, y_target,bottom_top) =
   x0:seq(i, max_iter, newton_block)
 with {
   // top starts at 1-ma.EPSILON
-  x0 = ma.EPSILON;
+  // x0 = select2(bottom_top,ma.EPSILON, 1-ma.EPSILON);
+  // x0 = select2(bottom_top,0.001, 0.999);
+  start = hslider("start", ma.EPSILON, ma.EPSILON, 1, 0.001);
+  x0 = select2(bottom_top,start, 1-start);
   newton_block(prev_x) = prev_x + (-F / J)
+                         // :max(0):min(1)
+                         :max(0):min(hslider("maximum", 3, 0.5, 3, 0.001))
+                                 // :max(0):min(ternary_search_max(dwsdx,c,0,1))
   with {
     F = dwsdx(c, prev_x) - y_target;
-    J = second_dwsdx(c, prev_x);
+    J = select2(checkbox("safe"), unsafe_J, safe_J);
+    unsafe_J = second_dwsdx(c, prev_x);
+    // Avoid divide-by-zero
+    safe_J = (abs(second_dwsdx(c, prev_x)):max(ma.EPSILON)) * sign(second_dwsdx(c, prev_x));
+    // ba.signum multiplies by 0 if x is 0
+    sign(x) = (x>=0)-(x<0);
   };
 };
+dwsdx_bisection_inverse(c, y_target,bottom_top) =
+  select2(bottom_top
+         , bisection_inverse_bottom(dwsdx(c), y_target, 0, ternary_search_max(dwsdx,c,0,1))
+         , bisection_inverse_top(dwsdx(c), y_target, ternary_search_max(dwsdx,c,0,1),1)
+         )
+;
 
+// Bisection search for inverse: finds x such that f(c,x) == y
 
-// # Newton-Raphson solver
-// def invert_dwsdx(c, y_target, x0=0.5, max_iter=100, tol=1e-8):
-// x = x0
-//     for i in range(max_iter):
-//     F = dwsdx(c, x) - y_target
-//         J = second_dwsdx(c, x)
-//             dx = -F / J
-//                  x += dx
-//                  if abs(dx) < tol:
-//                  print(f"Converged after {i+1} iterations.")
-//                  break
-//                  return x
+bisection_inverse_bottom(f, y, start, end) =
+  new_left_right(f, y, start, end)
+  : seq(i, max_iter, new_left_right(f, y))
+    :>_/2 // At the end, mid is the best estimate
+with {
+  // Compute new [left, right] bounds
+  new_left_right(f, y, left, right) =
+    new_left(f, y, left, right), new_right(f, y, left, right)
+  with {
+  mid = (left + right) / 2;
+  val = f(mid);
+  // If val < y, search right half, else search left half
+  new_left(f, y, left, right) = select2(val > y, mid, left);
+  new_right(f, y, left, right) = select2(val > y, right, mid);
+};
+};
+bisection_inverse_top(f, y, start, end) =
+  new_left_right(f, y, start, end)
+  : seq(i, max_iter, new_left_right(f, y))
+    :>_/2 // At the end, mid is the best estimate
+with {
+  // Compute new [left, right] bounds
+  new_left_right(f, y, left, right) =
+    new_left(f, y, left, right), new_right(f, y, left, right)
+  with {
+  mid = (left + right) / 2;
+  val = f(mid);
+  // If val < y, search right half, else search left half
+  new_left(f, y, left, right) = select2(val < y, mid, left);
+  new_right(f, y, left, right) = select2(val < y, right, mid);
+};
+};
+// Find c such that f(c) == target using the bisection method
+bad_bisection_inverse(f, target, start, end) =
+  new_left_right(f, target, start, end)
+  : seq(i, max_iter, new_left_right(f, target))
+    :>_/2  // Use midpoint of last interval as best estimate
+with {
+  new_left_right(f, target, left, right) =
+    new_left(f, target, left, right)
+   ,new_right(f, target, left, right)
+  with {
+  mid = (left + right) / 2;
 
-
+  // Check sign of f(left)-target vs f(mid)-target to decide next interval
+  new_left(f, target, left, right) =
+    select2((f(left) - target) * (f(mid) - target) < 0
+           , left
+           , mid
+           );
+  new_right(f, target, left, right) =
+    select2((f(left) - target) * (f(mid) - target) < 0
+           , mid
+           , right
+           );
+};
+};
 // TODO: maybe we can use a lookup table for the first guess in newton's method
 // similarly, can we use a table for thge first guess in the lamb compares?
 // TODO: use newton on f and do a hybrid
 
+// find the maximum
+max_dwsdx(c) =
+  0:seq(i, 800, max_finder(c,i))
+with {
+  max_finder(c,i,prev_x) =
+    max(prev_x, dwsdx(c, i/800));
+};
+
+// Ternary/golden-section max search:
+//
+// only works for Unimodal functions: functions that have a single min or max value
+//
+// Start with interval [a, b] = [0, 1].
+// Evaluate dwsdx at two interior points.
+// Based on which is greater, discard part of the interval.
+// Repeat until the interval is sufficiently small.
+//
+
+// TODO: make c a list, so this can be used with any function.
+// add to faustlibraries
+ternary_search_max(f,c,start,end) =
+  new_left_right(f,c,start,end)
+  : seq(i, max_iter, new_left_right(f,c))
+    :>_/2
+      // : f(c)
+      // : max(f(c),f(c))
+with {
+  new_left_right(f,c,left, right) =
+    new_left(f,c,left, right)
+   ,new_right(f,c,left, right)
+  with {
+  m1 = left + (right - left) / 3;
+  m2 = right - (right - left) / 3;
+  new_left(f,c,left, right) =
+    select2(f(c,m1) < f(c,m2)
+           , (left)
+           , (m1)
+           );
+  new_right(f,c,left, right) =
+    select2(f(c,m1) < f(c,m2)
+           , (m2)
+           , (right)
+           );
+};
+};
+// Golden Section Search for maximizing dwsdx
+golden_section_search_max(f, c, start, end) =
+  new_left_right(f, c, start, end)
+  : seq(i, max_iter, new_left_right(f, c))
+    // :>_/2
+  : max(f(c),f(c))
+with {
+  // Golden ratio constant
+  gr = (sqrt(5) + 1) / 2;
+  resphi = 2 - gr; // 0.618...
+
+  new_left_right(f, c, left, right) =
+    new_left(f, c, left, right),
+    new_right(f, c, left, right)
+  with {
+    d = gr * (right-left);
+    m1 = right - resphi * (right - left);
+    m2 = left + resphi * (right - left);
+
+    new_left(f, c, left, right) =
+      select2(f(c, m1) < f(c, m2), m1, left);
+
+    new_right(f, c, left, right) =
+      select2(f(c, m1) < f(c, m2), right, m2);
+  };
+};
+
+// function ternary_search_max(f, left, right, tolerance):
+// while (right - left) > tolerance:
+// m1 = left + (right - left) / 3
+// m2 = right - (right - left) / 3
+
+// if f(m1) < f(m2):
+// left = m1
+// else:
+// right = m2
+
+// # The maximum is approximately at (left + right) / 2
+// return (left + right) / 2
+
+
+
+//
 
 /*
 
