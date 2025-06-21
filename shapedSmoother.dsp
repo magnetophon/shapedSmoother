@@ -20,33 +20,31 @@ import("stdfaust.lib");
 
 
 process =
-  (dwsdx_bisection_inverse(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top"))
-   :hbargraph("[1]x bisect", 0, 1)
-   : dwsdx(c):hbargraph("[2]new y bisect", 0, 2.95))
-  // ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
-  // : dwsdx(c):hbargraph("[4]new y N-R", 0, 2.95))
+  (
+    (dwsdx_bisection_inverse(c, y_target,checkbox("top"))
+     :hbargraph("[1]x bisect", 0, 1)
+     : dwsdx(c):hbargraph("[2]new y bisect", 0, 2.95))
+    - y_target)
+<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
+  :hbargraph("same", 0, 1)
 
-  // (max_dwsdx(c):vbargraph("max val grid[unit:dB]", 0, 3))
-  // ,
-  // (ternary_search_max(dwsdx,c,0,1):vbargraph("max val ternary[unit:dB]", 0, 3))
-  // ,
-  // (golden_section_search_max(dwsdx,c,0,1):vbargraph("max val golden[unit:dB]", 0, 3))
+   // ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
+   // : dwsdx(c):hbargraph("[4]new y N-R", 0, 2.95))
+
+   // (max_dwsdx(c):vbargraph("max val grid[unit:dB]", 0, 3))
+   // ,
+
+   // (ternary_search_max(ternary_iter,dwsdx,0,1,c):vbargraph("max val ternary[unit:dB]", 0, 1))
+   // , (max_c_lut(c):vbargraph("max val table[unit:dB]", 0, 1))
+   // ,
+   // ((ternary_search_max(512,dwsdx,0,1,c)==ternary_search_max(ternary_iter,dwsdx,0,1,c)):hbargraph("same", 0, 1))
+
+   // ((abs(max_c_lut(c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+   // , ((min(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c))
+   // / max(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c)))
+   // :hbargraph("error", 0.999, 1.001)
+   // )
 ;
-c =
-  hslider("c", 0.001, 0.001, 3, 0.001)
-  // * -1
-;
-// shape2c(shapeSlider);
-// TODO: curve the slider, like in lamb
-shape2c(slider) =
-  slider
-  /nrShapes
-  * maxShape
-  + 0.001
-;
-shapeSlider = hslider("shape", 0, 0, nrShapes, 1):int;
-nrShapes = 16;
-maxShape = 3;
 
 // testSig,
 // shapedSmoother(testSig);
@@ -56,7 +54,28 @@ maxShape = 3;
 
 // shapedSmoother(x);
 
+// y_target = hslider("y", 0, 0, 1, 0.001)*max_c_lut(c);
+y_target = hslider("y", 0, 0, 1, 0.001)*max_c_lut(c);
 
+
+c =
+  // hslider("c", 0.001, 0.001, 3, 0.001)
+  // * -1
+  // ;
+  shape2c(shapeSlider);
+// TODO: curve the slider, like in lamb
+shape2c(slider) =
+  slider
+  /nrShapes
+  * maxShape
+  + 0.001
+;
+// shapeSlider = hslider("shape", 0, 0, nrShapes, 1):int;
+shapeSlider = hslider("shape", 0, 0, nrShapes, 1):floor;
+// TODO: make this a pow of 2 and compensate elsewhere
+nrShapes = 15;
+// nrShapes = 3;
+maxShape = 3;
 
 shapedSmoother(x) =
   (x:att_env~(_,_,_))
@@ -242,35 +261,17 @@ second_dwsdx(c, x) =
   second_dsdp(f(c, x)) * pow(dfdx(c, x), 2)
   + dsdp(f(c, x)) * second_dfdx(c, x);
 
-// max_iter = 800;
-max_iter = 80;
-// # Newton-Raphson solver
-invert_dwsdx(c, y_target,bottom_top) =
-  x0:seq(i, max_iter, newton_block)
-with {
-  // top starts at 1-ma.EPSILON
-  // x0 = select2(bottom_top,ma.EPSILON, 1-ma.EPSILON);
-  // x0 = select2(bottom_top,0.001, 0.999);
-  start = hslider("start", ma.EPSILON, ma.EPSILON, 1, 0.001);
-  x0 = select2(bottom_top,start, 1-start);
-  newton_block(prev_x) = prev_x + (-F / J)
-                         // :max(0):min(1)
-                         :max(0):min(hslider("maximum", 3, 0.5, 3, 0.001))
-                                 // :max(0):min(ternary_search_max(dwsdx,c,0,1))
-  with {
-    F = dwsdx(c, prev_x) - y_target;
-    J = select2(checkbox("safe"), unsafe_J, safe_J);
-    unsafe_J = second_dwsdx(c, prev_x);
-    // Avoid divide-by-zero
-    safe_J = (abs(second_dwsdx(c, prev_x)):max(ma.EPSILON)) * sign(second_dwsdx(c, prev_x));
-    // ba.signum multiplies by 0 if x is 0
-    sign(x) = (x>=0)-(x<0);
-  };
-};
+// max_iter = 128;
+max_iter = 32;
+// max_iter = 16;
+// max_iter = 4;
+
 dwsdx_bisection_inverse(c, y_target,bottom_top) =
   select2(bottom_top
-         , bisection_inverse_bottom(dwsdx(c), y_target, 0, ternary_search_max(dwsdx,c,0,1))
-         , bisection_inverse_top(dwsdx(c), y_target, ternary_search_max(dwsdx,c,0,1),1)
+          // , bisection_inverse_bottom(dwsdx(c), y_target, 0, ternary_search_max(ternary_iter,dwsdx,0,1,c))
+          // , bisection_inverse_top(dwsdx(c), y_target, ternary_search_max(ternary_iter,dwsdx,0,1,c),1)
+         , bisection_inverse_bottom(dwsdx(c), y_target, 0,            max_c_lut(c))
+         , bisection_inverse_top   (dwsdx(c), y_target, max_c_lut(c), 1)
          )
 ;
 
@@ -357,9 +358,9 @@ with {
 
 // TODO: make c a list, so this can be used with any function.
 // add to faustlibraries
-ternary_search_max(f,c,start,end) =
+ternary_search_max(nr_iter,f,start,end,c) =
   new_left_right(f,c,start,end)
-  : seq(i, max_iter, new_left_right(f,c))
+  : seq(i, nr_iter, new_left_right(f,c))
     :>_/2
       // : f(c)
       // : max(f(c),f(c))
@@ -382,7 +383,13 @@ with {
            );
 };
 };
+
+//tabulate(C, FX, S, r0, r1, x).val
+max_c_lut(c) = ba.tabulate(0, ternary_search_max(ternary_iter,dwsdx,0,1), nrShapes+1, shape2c(0), shape2c(nrShapes), c).val;
+// max_c_lut(c) = ba.tabulate(0, ternary_search_max(ternary_iter,dwsdx,0,1), nrShapes, shape2c(0), shape2c(nrShapes-1), c).val;
+
 // Golden Section Search for maximizing dwsdx
+// doesn't work
 golden_section_search_max(f, c, start, end) =
   new_left_right(f, c, start, end)
   : seq(i, max_iter, new_left_right(f, c))
@@ -409,20 +416,6 @@ with {
   };
 };
 
-// function ternary_search_max(f, left, right, tolerance):
-// while (right - left) > tolerance:
-// m1 = left + (right - left) / 3
-// m2 = right - (right - left) / 3
-
-// if f(m1) < f(m2):
-// left = m1
-// else:
-// right = m2
-
-// # The maximum is approximately at (left + right) / 2
-// return (left + right) / 2
-
-
 
 //
 
@@ -443,3 +436,55 @@ dc2dx(c, x) =
   * a(c) * expma(c,x) / denom(c);
 
 */
+
+bracket(C, FX, S, r0, r1, x) = environment {
+                                 // Maximum index to access
+                                 mid = S-1;
+
+                                 // Create the table
+                                 wf = r0 + float(rid(ba.time, 1))*(r1-r0)/float(mid) : FX;
+
+                                 // Prepare the 'float' table read index
+                                 id = (x-r0)/(r1-r0)*mid;
+
+                                 // Limit the table read index in [0, mid] if C = 1
+                                 rid(x, 0) = x;
+                                 rid(x, 1) = max(0, min(x, mid));
+
+                                 // Tabulate an unary 'FX' function on a range [r0, r1]
+                                 val = y0 with { y0 = rdtable(S, wf, rid(int(id+0.5), C)); };
+
+                                 // Tabulate an unary 'FX' function over the range [r0, r1] with linear interpolation
+                                 lin = it.interpolate_linear(d,y0,y1)
+                                 with {
+                                   x0 = int(id);
+                                   x1 = x0+1;
+                                   d  = id-x0;
+                                   y0 = rdtable(S, wf, rid(x0, C));
+                                   y1 = rdtable(S, wf, rid(x1, C));
+                                 };
+
+                                 // Tabulate an unary 'FX' function over the range [r0, r1] with cubic interpolation
+                                 cub = it.interpolate_cubic(d,y0,y1,y2,y3)
+                                 with {
+                                   x0 = x1-1;
+                                   x1 = int(id);
+                                   x2 = x1+1;
+                                   x3 = x2+1;
+                                   d  = id-x1;
+                                   y0 = rdtable(S, wf, rid(x0, C));
+                                   y1 = rdtable(S, wf, rid(x1, C));
+                                   y2 = rdtable(S, wf, rid(x2, C));
+                                   y3 = rdtable(S, wf, rid(x3, C));
+                                 };
+                               };
+
+declare tabulate author "Stephane Letz";
+
+// 128 is not enough when maxShape = 99
+// singleprecision ternary_iter = 256;
+// doubleprecision ternary_iter = 256;
+// quadprecision ternary_iter = 256;
+// fixedpointprecision ternary_iter = 256;
+
+ternary_iter = 128;
