@@ -25,7 +25,7 @@ process =
      :hbargraph("[1]x bisect", 0, 1)
      : dwsdx(c):hbargraph("[2]new y bisect", 0, 2.95))
     - y_target)
-<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
+  <(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
   :hbargraph("same", 0, 1)
 
    // ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
@@ -39,10 +39,15 @@ process =
    // ,
    // ((ternary_search_max(512,dwsdx,0,1,c)==ternary_search_max(ternary_iter,dwsdx,0,1,c)):hbargraph("same", 0, 1))
 
-   // ((abs(max_c_lut(c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
-   // , ((min(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c))
-   // / max(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c)))
-   // :hbargraph("error", 0.999, 1.001)
+   // (
+   // (abs(max_c_lut(c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+
+     // (abs(ternary_search_max(512,dwsdx,0,1,c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+
+
+     // , ((min(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c))
+     // / max(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c)))
+     // :hbargraph("error", 0.999, 1.001)
    // )
 ;
 
@@ -73,7 +78,7 @@ shape2c(slider) =
 // shapeSlider = hslider("shape", 0, 0, nrShapes, 1):int;
 shapeSlider = hslider("shape", 0, 0, nrShapes, 1):floor;
 // TODO: make this a pow of 2 and compensate elsewhere
-nrShapes = 15;
+nrShapes = 127;
 // nrShapes = 3;
 maxShape = 3;
 
@@ -267,11 +272,14 @@ max_iter = 32;
 // max_iter = 4;
 
 dwsdx_bisection_inverse(c, y_target,bottom_top) =
+  max_c_lut(c)<:
   select2(bottom_top
           // , bisection_inverse_bottom(dwsdx(c), y_target, 0, ternary_search_max(ternary_iter,dwsdx,0,1,c))
           // , bisection_inverse_top(dwsdx(c), y_target, ternary_search_max(ternary_iter,dwsdx,0,1,c),1)
-         , bisection_inverse_bottom(dwsdx(c), y_target, 0,            max_c_lut(c))
-         , bisection_inverse_top   (dwsdx(c), y_target, max_c_lut(c), 1)
+          // , bisection_inverse_bottom(dwsdx(c), y_target, 0,            max_c_lut(c))
+          // , bisection_inverse_top   (dwsdx(c), y_target, max_c_lut(c), 1)
+         , bisection_inverse_bottom(dwsdx(c), y_target, 0, _)
+         , bisection_inverse_top   (dwsdx(c), y_target, _, 1)
          )
 ;
 
@@ -487,4 +495,8 @@ declare tabulate author "Stephane Letz";
 // quadprecision ternary_iter = 256;
 // fixedpointprecision ternary_iter = 256;
 
+// for maxShape=3 and nrShapes=15:
+// all within 1*ma.EPSILON
 ternary_iter = 128;
+// ternary_iter = 64;
+// ternary_iter = 32;
