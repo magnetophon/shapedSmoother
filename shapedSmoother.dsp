@@ -5,6 +5,7 @@ declare license "AGPL-3.0-only";
 declare copyright "2025 - 2025, Bart Brouns";
 
 import("stdfaust.lib");
+import("max_c.lib");
 
 /*
 
@@ -20,37 +21,43 @@ import("stdfaust.lib");
 
 
 process =
-  ternary_search_max(2,dwsdx,0,1,shape2c(ba.time:min(nrShapes)))
+  // ternary_search_max(512,dwsdx,0,1,shape2c(ba.time:min(nrShapes+1)))
+  // max_c_rdtable(ba.time:min(nrShapes+1))
 
-  // (
-  // (dwsdx_bisection_inverse(c, y_target,checkbox("top"))
-  // :hbargraph("[1]x bisect", 0, 1)
-  // : dwsdx(c):hbargraph("[2]new y bisect", 0, 2.95))
-  // - y_target)
-  // <(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
-  // :hbargraph("same", 0, 1)
+  (
+    (dwsdx_bisection_inverse(c, y_target,checkbox("top"))
+     :hbargraph("[1]x bisect", 0, 1)
+     : dwsdx(c):hbargraph("[2]new y bisect", 0, 2.95))
+    - y_target)
+  <(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
+  :hbargraph("same", 0, 1)
 
-  // ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
-  // : dwsdx(c):hbargraph("[4]new y N-R", 0, 2.95))
+   // ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
+   // : dwsdx(c):hbargraph("[4]new y N-R", 0, 2.95))
 
-  // (max_dwsdx(c):vbargraph("max val grid[unit:dB]", 0, 3))
-  // ,
+   // (max_dwsdx(c):vbargraph("max val grid[unit:dB]", 0, 3))
+   // ,
 
-  // (ternary_search_max(ternary_iter,dwsdx,0,1,c):vbargraph("max val ternary[unit:dB]", 0, 1))
-  // , (max_c_lut(c):vbargraph("max val table[unit:dB]", 0, 1))
-  // ,
-  // ((ternary_search_max(512,dwsdx,0,1,c)==ternary_search_max(ternary_iter,dwsdx,0,1,c)):hbargraph("same", 0, 1))
+   // (ternary_search_max(ternary_iter,dwsdx,0,1,c):vbargraph("max val ternary[unit:dB]", 0, 1))
+   // , (max_c_lut(c):vbargraph("max val table[unit:dB]", 0, 1))
+   // ,
+   // ((ternary_search_max(512,dwsdx,0,1,c)==ternary_search_max(ternary_iter,dwsdx,0,1,c)):hbargraph("same", 0, 1))
 
-  // (
-  // (abs(max_c_lut(c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+   // (abs(max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1)))
+   // :hbargraph("same", 0, 1)
 
-  // (abs(ternary_search_max(512,dwsdx,0,1,c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+   // (max_c_rdtable(shapeSlider):hbargraph("lut", 0.5, 1))
+   // ,(ternary_search_max(512,dwsdx,0,1,c):hbargraph("search", 0.5, 1))
 
 
-  // , ((min(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c))
-  // / max(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c)))
-  // :hbargraph("error", 0.999, 1.001)
-  // )
+
+   // (abs(ternary_search_max(512,dwsdx,0,1,c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+
+
+   // , ((min(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c))
+   // / max(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c)))
+   // :hbargraph("error", 0.999, 1.001)
+   // )
 ;
 
 // testSig,
@@ -62,7 +69,7 @@ process =
 // shapedSmoother(x);
 
 // y_target = hslider("y", 0, 0, 1, 0.001)*max_c_lut(c);
-y_target = hslider("y", 0, 0, 1, 0.001)*max_c_lut(c);
+y_target = hslider("y", 0, 0, 1, 0.001)*max_c_rdtable(shapeSlider);
 
 
 c =
@@ -74,19 +81,19 @@ c =
 shape2c(slider) =
   slider
   /nrShapes
-  // <:pow(1+0.42*_)
-  * maxShape
-  + 0.001
-  // + 0.00099
-  // + ma.EPSILON
+  <:pow(1+0.42*_)
+    * maxShape
+    // + ma.EPSILON
+    + 0.0000000000001
+    // + 0.00000000000001
 ;
 // shapeSlider = hslider("shape", 0, 0, nrShapes, 1):int;
 shapeSlider = hslider("shape", 0, 0, nrShapes, 1):floor;
 // TODO: make this a pow of 2 and compensate elsewhere
 nrShapes = 127;
 // nrShapes = 3;
-// maxShape = 2.42;
-maxShape = 3;
+maxShape = 2.42;
+// maxShape = 3;
 
 shapedSmoother(x) =
   (x:att_env~(_,_,_))
@@ -272,20 +279,22 @@ second_dwsdx(c, x) =
   second_dsdp(f(c, x)) * pow(dfdx(c, x), 2)
   + dsdp(f(c, x)) * second_dfdx(c, x);
 
+max_iter = 512;
 // max_iter = 128;
-max_iter = 32;
+// max_iter = 32;
 // max_iter = 16;
 // max_iter = 4;
 
 dwsdx_bisection_inverse(c, y_target,bottom_top) =
-  max_c_lut(c)<:
+  // max_c_lut(c)<:
+
   select2(bottom_top
           // , bisection_inverse_bottom(dwsdx(c), y_target, 0, ternary_search_max(ternary_iter,dwsdx,0,1,c))
           // , bisection_inverse_top(dwsdx(c), y_target, ternary_search_max(ternary_iter,dwsdx,0,1,c),1)
           // , bisection_inverse_bottom(dwsdx(c), y_target, 0,            max_c_lut(c))
           // , bisection_inverse_top   (dwsdx(c), y_target, max_c_lut(c), 1)
-         , bisection_inverse_bottom(dwsdx(c), y_target, 0, _)
-         , bisection_inverse_top   (dwsdx(c), y_target, _, 1)
+         , bisection_inverse_bottom(dwsdx(c), y_target, 0, max_c_rdtable(shapeSlider)+0.001)
+         , bisection_inverse_top   (dwsdx(c), y_target, max_c_rdtable(shapeSlider)-0.001, 1)
          )
 ;
 
