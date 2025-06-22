@@ -20,35 +20,37 @@ import("stdfaust.lib");
 
 
 process =
-  (
-    (dwsdx_bisection_inverse(c, y_target,checkbox("top"))
-     :hbargraph("[1]x bisect", 0, 1)
-     : dwsdx(c):hbargraph("[2]new y bisect", 0, 2.95))
-    - y_target)
-  <(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
-  :hbargraph("same", 0, 1)
+  ternary_search_max(2,dwsdx,0,1,shape2c(ba.time:min(nrShapes)))
 
-   // ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
-   // : dwsdx(c):hbargraph("[4]new y N-R", 0, 2.95))
+  // (
+  // (dwsdx_bisection_inverse(c, y_target,checkbox("top"))
+  // :hbargraph("[1]x bisect", 0, 1)
+  // : dwsdx(c):hbargraph("[2]new y bisect", 0, 2.95))
+  // - y_target)
+  // <(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
+  // :hbargraph("same", 0, 1)
 
-   // (max_dwsdx(c):vbargraph("max val grid[unit:dB]", 0, 3))
-   // ,
+  // ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
+  // : dwsdx(c):hbargraph("[4]new y N-R", 0, 2.95))
 
-   // (ternary_search_max(ternary_iter,dwsdx,0,1,c):vbargraph("max val ternary[unit:dB]", 0, 1))
-   // , (max_c_lut(c):vbargraph("max val table[unit:dB]", 0, 1))
-   // ,
-   // ((ternary_search_max(512,dwsdx,0,1,c)==ternary_search_max(ternary_iter,dwsdx,0,1,c)):hbargraph("same", 0, 1))
+  // (max_dwsdx(c):vbargraph("max val grid[unit:dB]", 0, 3))
+  // ,
 
-   // (
-   // (abs(max_c_lut(c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+  // (ternary_search_max(ternary_iter,dwsdx,0,1,c):vbargraph("max val ternary[unit:dB]", 0, 1))
+  // , (max_c_lut(c):vbargraph("max val table[unit:dB]", 0, 1))
+  // ,
+  // ((ternary_search_max(512,dwsdx,0,1,c)==ternary_search_max(ternary_iter,dwsdx,0,1,c)):hbargraph("same", 0, 1))
 
-     // (abs(ternary_search_max(512,dwsdx,0,1,c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+  // (
+  // (abs(max_c_lut(c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+
+  // (abs(ternary_search_max(512,dwsdx,0,1,c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
 
 
-     // , ((min(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c))
-     // / max(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c)))
-     // :hbargraph("error", 0.999, 1.001)
-   // )
+  // , ((min(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c))
+  // / max(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c)))
+  // :hbargraph("error", 0.999, 1.001)
+  // )
 ;
 
 // testSig,
@@ -72,14 +74,18 @@ c =
 shape2c(slider) =
   slider
   /nrShapes
+  // <:pow(1+0.42*_)
   * maxShape
   + 0.001
+  // + 0.00099
+  // + ma.EPSILON
 ;
 // shapeSlider = hslider("shape", 0, 0, nrShapes, 1):int;
 shapeSlider = hslider("shape", 0, 0, nrShapes, 1):floor;
 // TODO: make this a pow of 2 and compensate elsewhere
 nrShapes = 127;
 // nrShapes = 3;
+// maxShape = 2.42;
 maxShape = 3;
 
 shapedSmoother(x) =
