@@ -19,16 +19,51 @@ import("max_c.lib");
 
 /*/
 
+// working for hybrid:
+// (1024,32)
+
+// max_iter = 1024;
+// 128 gives the same result as 1024
+// max_iter = 128;
+// 64 doesn't
+// max_iter = 64;
+max_iter = 32;
+// max_iter = 16;
+// for diagram:
+// max_iter = 4;
+
+inverseTableSize = 1024;
+// inverseTableSize = 2048;
+// inverseTableSize = pow(2,14);
+y_time =
+  ((ba.time:min(inverseTableSize)/inverseTableSize));
+
+
+
 
 process =
-  ternary_search_max(512,dwsdx,0,1,shape2c(ba.time:min(nrShapes+1)))
-  -max_c_rdtable(ba.time:min(nrShapes+1))
+  // ternary_search_max(512,dwsdx,0,1,shape2c(ba.time:min(nrShapes+1)))
+  // -max_c_rdtable(ba.time:min(nrShapes+1))
 
-  // (
-  // (dwsdx_bisection_inverse(c, y_target,checkbox("top"))
-  // :hbargraph("[1]x bisect", 0, 1)
-  // : dwsdx(c):hbargraph("[2]new y bisect", 0, 2.95))
-  // - y_target)
+  (
+    (
+      dwsdx_hybrid_lut_bisection_inverse(nrShapes, y_time,0)
+      // dwsdx_bisection_inverse(nrShapes, y_time, 0)
+
+      // dwsdx_bisection_inverse_bottom(nrShapes,y_time)
+      // dwsdx_inverse_lut(nrShapes, y_time,1)
+
+
+      // :ba.selectn(4,hslider("x", 0, 0, 4, 1))
+      // selectN(par(i, 4, i*2),hslider("x", 0, 0, 4, 1))
+
+      // :hbargraph("[1]x bisect", 0, 1)
+      : dwsdx(shape2c(nrShapes))
+        // :hbargraph("[2]new y bisect", 0, 2.95)
+    )
+    - y_time
+  )
+
   // <(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
   // :hbargraph("same", 0, 1)
 
@@ -46,6 +81,7 @@ process =
   // TODO: find out why this doesn't always match up:
   // (abs(max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,shape2c(shapeSlider)))<(ma.EPSILON*hslider("prec", 4, 1, 4096, 1)))
   // (abs(max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,shape2c(shapeSlider)))<(0.001*hslider("prec", ma.EPSILON, 0, 1, 0.001)))
+  // max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,shape2c(shapeSlider))
   // :hbargraph("same", 0, 1)
 
   // (max_c_rdtable(shapeSlider):hbargraph("lut", 0.5, 1))
@@ -72,14 +108,14 @@ process =
 
 // y_target = hslider("y", 0, 0, 1, 0.001)*max_c_lut(c);
 // y_target = hslider("y", 0, 0, 1, 0.001)*max_c_rdtable(shapeSlider):si.smoo;
-y_target = hslider("y", 0, 0, 1, 0.001)*max_c_rdtable(shapeSlider);
+// y_target = hslider("y", 0, 0, 1, 0.001)*max_c_rdtable(shapeSlider);
 
 
-c =
-  // hslider("c", 0.001, 0.001, 3, 0.001)
-  // * -1
-  // ;
-  shape2c(shapeSlider);
+// c =
+// hslider("c", 0.001, 0.001, 3, 0.001)
+// * -1
+// ;
+// shape2c(shapeSlider);
 // TODO: curve the slider, like in lamb
 shape2c(slider) =
   slider
@@ -91,12 +127,24 @@ shape2c(slider) =
     // + 0.00000000000001
 ;
 // shapeSlider = hslider("shape", 0, 0, nrShapes, 1):int;
-shapeSlider = hslider("shape", 0, 0, nrShapes, 1):floor;
+// shapeSlider = hslider("shape", nrShapes, 0, nrShapes, 1):floor;
 // TODO: make this a pow of 2 and compensate elsewhere
 nrShapes = 127;
 // nrShapes = 3;
 maxShape = 2.42;
 // maxShape = 3;
+
+inverseTargetDerivativeBottom(y) =
+  ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI) ;
+
+inverseTargetDerivativeBottomX(x,y) =
+  ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI)*x ;
+
+inverseTargetDerivativeTop(y) =
+  (acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI ;
+
+targetDerivative(x) =
+  0.5*ma.PI * cos(ma.PI*x-(0.5*ma.PI));
 
 shapedSmoother(x) =
   (x:att_env~(_,_,_))
@@ -110,17 +158,10 @@ with {
   , totalStep
   with {
   targetCurve(x)= (sin((x-0.5)*ma.PI)+1)*0.5;
-  targetDerivative(x) =
-    0.5*ma.PI * cos(ma.PI*x-(0.5*ma.PI));
 
   // which mult factor do we need to match the speed we had previously?
   // plug that into inverseTargetDerivative to get the phase
 
-  inverseTargetDerivativeBottom(y) =
-    ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI) ;
-
-  inverseTargetDerivativeTop(y) =
-    (acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI ;
 
 
   attacking = (prev<x)*(att>0);
@@ -282,24 +323,60 @@ second_dwsdx(c, x) =
   second_dsdp(f(c, x)) * pow(dfdx(c, x), 2)
   + dsdp(f(c, x)) * second_dfdx(c, x);
 
-max_iter = 512;
-// max_iter = 128;
-// max_iter = 32;
-// max_iter = 16;
-// max_iter = 4;
 
-dwsdx_bisection_inverse(c, y_target,bottom_top) =
-  // max_c_lut(c)<:
-
+dwsdx_bisection_inverse(c_int, y_target,bottom_top) =
   select2(bottom_top
           // , bisection_inverse_bottom(dwsdx(c), y_target, 0, ternary_search_max(ternary_iter,dwsdx,0,1,c))
           // , bisection_inverse_top(dwsdx(c), y_target, ternary_search_max(ternary_iter,dwsdx,0,1,c),1)
           // , bisection_inverse_bottom(dwsdx(c), y_target, 0,            max_c_lut(c))
           // , bisection_inverse_top   (dwsdx(c), y_target, max_c_lut(c), 1)
-         , bisection_inverse_bottom(dwsdx(c), y_target, 0, max_c_rdtable(shapeSlider)+0.001)
-         , bisection_inverse_top   (dwsdx(c), y_target, max_c_rdtable(shapeSlider)-0.001, 1)
+
+          // , bisection_inverse_bottom(dwsdx(c), y_target, 0, max_c_rdtable(shapeSlider))
+          // , bisection_inverse_top   (dwsdx(c), y_target, max_c_rdtable(shapeSlider), 1)
+
+         , dwsdx_bisection_inverse_bottom(c_int,y_target)
+         , bisection_inverse_top   (dwsdx(shape2c(c_int)), y_target, max_c_rdtable(shapeSlider), 1)
          )
 ;
+dwsdx_bisection_inverse_bottom(c_int,y_target) =
+  bisection_inverse_bottom(dwsdx(shape2c(c_int)), y_target, 0, max_c_rdtable(c_int));
+dwsdx_bisection_inverse_top(c_int,y_target) =
+  bisection_inverse_top(dwsdx(shape2c(c_int)), y_target, max_c_rdtable(c_int), 1);
+
+// put dwsdx_bisection_inverse(c, y_target) in a 2d table
+dwsdx_inverse_lut(c_int, y_target,bottom_top) =
+  select2(bottom_top
+         , ba.tabulateNd(0, dwsdx_bisection_inverse_bottom,
+                         (nrShapes, inverseTableSize,
+                          0, 0,
+                          nrShapes, 1,
+                          c_int,y_target)
+                         // TODO: use 2 times .val to bracket
+                        ).lin
+
+         , ba.tabulateNd(0, dwsdx_bisection_inverse_top,
+                         (nrShapes, inverseTableSize,
+                          0, 0,
+                          nrShapes, 1,
+                          c_int,y_target)
+                         // TODO: use 2 times .val to bracket
+                        ).lin
+         );
+
+// get val from table above and from table below the y_target we are looking for
+// if dwsdx(c,middle) > y_target
+dwsdx_hybrid_lut_bisection_inverse(c_int, y_target,bottom_top) =
+  select2(bottom_top
+          // , bisection_inverse_bottom(dwsdx(shape2c(c_int)), y_target, 0, max_c_rdtable(c_int))
+          // , bisection_inverse_top(dwsdx(shape2c(c_int)), y_target, max_c_rdtable(c_int), 1)
+         , bisection_inverse_bottom(dwsdx(shape2c(c_int)), y_target
+                                    , dwsdx_inverse_lut(c_int, y_target-(0.01/inverseTableSize),bottom_top)
+                                    , dwsdx_inverse_lut(c_int, y_target+(0.01/inverseTableSize),bottom_top)
+                                      // , dwsdx_inverse_lut(c_int, y_target-(0.1/inverseTableSize):max(0),bottom_top)
+                                      // , dwsdx_inverse_lut(c_int, y_target+(0.1/inverseTableSize):min(1),bottom_top)
+                                   )
+         , bisection_inverse_top(dwsdx(shape2c(c_int)), y_target, max_c_rdtable(c_int), 1)
+         );
 
 // Bisection search for inverse: finds x such that f(c,x) == y
 
