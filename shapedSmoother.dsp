@@ -24,17 +24,23 @@ import("max_c.lib");
 
 // max_iter = 1024;
 // 128 gives the same result as 1024
-// max_iter = 128;
+max_iter = 128;
 // 64 doesn't
 // max_iter = 64;
-max_iter = 32;
+// max_iter = 32;
 // max_iter = 16;
+// max_iter = 8;
 // for diagram:
 // max_iter = 4;
 
-inverseTableSize = 1024;
+// hybrid_iter = 8;
+hybrid_iter = 16;
+// hybrid_iter = 32;
+// hybrid_iter = 64;
+
+// inverseTableSize = 1024;
 // inverseTableSize = 2048;
-// inverseTableSize = pow(2,14);
+inverseTableSize = pow(2,14);
 y_time =
   ((ba.time:min(inverseTableSize)/inverseTableSize));
 
@@ -47,56 +53,46 @@ process =
 
   (
     (
-      dwsdx_hybrid_lut_bisection_inverse(nrShapes, y_time,0)
-      // dwsdx_bisection_inverse(nrShapes, y_time, 0)
-
-      // dwsdx_bisection_inverse_bottom(nrShapes,y_time)
-      // dwsdx_inverse_lut(nrShapes, y_time,1)
-
-
-      // :ba.selectn(4,hslider("x", 0, 0, 4, 1))
-      // selectN(par(i, 4, i*2),hslider("x", 0, 0, 4, 1))
-
-      // :hbargraph("[1]x bisect", 0, 1)
+      dwsdx_hybrid_lut_bisection_inverse(nrShapes, y_time, 0)
+      // dwsdx_inverse_lut(nrShapes, y_time,0)
       : dwsdx(shape2c(nrShapes))
-        // :hbargraph("[2]new y bisect", 0, 2.95)
     )
     - y_time
-  )
+  );
 
-  // <(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
-  // :hbargraph("same", 0, 1)
+// <(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))
+// :hbargraph("same", 0, 1)
 
-  // ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
-  // : dwsdx(c):hbargraph("[4]new y N-R", 0, 2.95))
+// ,(             invert_dwsdx(c, hslider("y", 0, 0, 2.95, 0.001),checkbox("top")):hbargraph("[3]x N-R", 0, 1)
+// : dwsdx(c):hbargraph("[4]new y N-R", 0, 2.95))
 
-  // (max_dwsdx(c):vbargraph("max val grid[unit:dB]", 0, 3))
-  // ,
+// (max_dwsdx(c):vbargraph("max val grid[unit:dB]", 0, 3))
+// ,
 
-  // (ternary_search_max(ternary_iter,dwsdx,0,1,c):vbargraph("max val ternary[unit:dB]", 0, 1))
-  // , (max_c_lut(c):vbargraph("max val table[unit:dB]", 0, 1))
-  // ,
-  // ((ternary_search_max(512,dwsdx,0,1,c)==ternary_search_max(ternary_iter,dwsdx,0,1,c)):hbargraph("same", 0, 1))
+// (ternary_search_max(ternary_iter,dwsdx,0,1,c):vbargraph("max val ternary[unit:dB]", 0, 1))
+// , (max_c_lut(c):vbargraph("max val table[unit:dB]", 0, 1))
+// ,
+// ((ternary_search_max(512,dwsdx,0,1,c)==ternary_search_max(ternary_iter,dwsdx,0,1,c)):hbargraph("same", 0, 1))
 
-  // TODO: find out why this doesn't always match up:
-  // (abs(max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,shape2c(shapeSlider)))<(ma.EPSILON*hslider("prec", 4, 1, 4096, 1)))
-  // (abs(max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,shape2c(shapeSlider)))<(0.001*hslider("prec", ma.EPSILON, 0, 1, 0.001)))
-  // max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,shape2c(shapeSlider))
-  // :hbargraph("same", 0, 1)
+// TODO: find out why this doesn't always match up:
+// (abs(max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,shape2c(shapeSlider)))<(ma.EPSILON*hslider("prec", 4, 1, 4096, 1)))
+// (abs(max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,shape2c(shapeSlider)))<(0.001*hslider("prec", ma.EPSILON, 0, 1, 0.001)))
+// max_c_rdtable(shapeSlider)-ternary_search_max(512,dwsdx,0,1,shape2c(shapeSlider))
+// :hbargraph("same", 0, 1)
 
-  // (max_c_rdtable(shapeSlider):hbargraph("lut", 0.5, 1))
-  // ,(ternary_search_max(512,dwsdx,0,1,c):hbargraph("search", 0.5, 1))
-
-
-
-  // (abs(ternary_search_max(512,dwsdx,0,1,c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+// (max_c_rdtable(shapeSlider):hbargraph("lut", 0.5, 1))
+// ,(ternary_search_max(512,dwsdx,0,1,c):hbargraph("search", 0.5, 1))
 
 
-  // , ((min(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c))
-  // / max(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c)))
-  // :hbargraph("error", 0.999, 1.001)
-  // )
-;
+
+// (abs(ternary_search_max(512,dwsdx,0,1,c)-ternary_search_max(ternary_iter,dwsdx,0,1,c))<(ma.EPSILON*hslider("prec", 4, 1, 1024, 1))):hbargraph("same", 0, 1))
+
+
+// , ((min(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c))
+// / max(ternary_search_max(ternary_iter,dwsdx,0,1,c),max_c_lut(c)))
+// :hbargraph("error", 0.999, 1.001)
+// )
+// ;
 
 // testSig,
 // shapedSmoother(testSig);
@@ -116,7 +112,6 @@ process =
 // * -1
 // ;
 // shape2c(shapeSlider);
-// TODO: curve the slider, like in lamb
 shape2c(slider) =
   slider
   /nrShapes
@@ -135,16 +130,24 @@ maxShape = 2.42;
 // maxShape = 3;
 
 inverseTargetDerivativeBottom(y) =
-  ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI) ;
-
-inverseTargetDerivativeBottomX(x,y) =
-  ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI)*x ;
+  // NR_dwsdx_hybrid_lut_bisection_inverse(0, y, 0);
+  dwsdx_hybrid_lut_bisection_inverse(0, y, 0);
+// dwsdx_inverse_lut(0, y,0);
+// ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI) ;
 
 inverseTargetDerivativeTop(y) =
-  (acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI ;
+  // NR_dwsdx_hybrid_lut_bisection_inverse(0, y, 1);
+  dwsdx_hybrid_lut_bisection_inverse(0, y, 1);
+// dwsdx_inverse_lut(0, y,1);
+// (acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI ;
 
 targetDerivative(x) =
-  0.5*ma.PI * cos(ma.PI*x-(0.5*ma.PI));
+  dwsdx(shape2c(0), x);
+// 0.5*ma.PI * cos(ma.PI*x-(0.5*ma.PI));
+
+targetCurve(x) =
+  ws(shape2c(0),x);
+// (sin((x-0.5)*ma.PI)+1)*0.5;
 
 shapedSmoother(x) =
   (x:att_env~(_,_,_))
@@ -157,7 +160,6 @@ with {
   , newPhase
   , totalStep
   with {
-  targetCurve(x)= (sin((x-0.5)*ma.PI)+1)*0.5;
 
   // which mult factor do we need to match the speed we had previously?
   // plug that into inverseTargetDerivative to get the phase
@@ -335,16 +337,23 @@ dwsdx_bisection_inverse(c_int, y_target,bottom_top) =
           // , bisection_inverse_top   (dwsdx(c), y_target, max_c_rdtable(shapeSlider), 1)
 
          , dwsdx_bisection_inverse_bottom(c_int,y_target)
-         , bisection_inverse_top   (dwsdx(shape2c(c_int)), y_target, max_c_rdtable(shapeSlider), 1)
+         , dwsdx_bisection_inverse_top(c_int,y_target)
          )
 ;
 dwsdx_bisection_inverse_bottom(c_int,y_target) =
-  bisection_inverse_bottom(dwsdx(shape2c(c_int)), y_target, 0, max_c_rdtable(c_int));
+  bisection_inverse_bottom(max_iter,dwsdx(shape2c(c_int)), y_target, 0, max_c_rdtable(c_int));
 dwsdx_bisection_inverse_top(c_int,y_target) =
-  bisection_inverse_top(dwsdx(shape2c(c_int)), y_target, max_c_rdtable(c_int), 1);
+  bisection_inverse_top(max_iter,dwsdx(shape2c(c_int)), y_target, max_c_rdtable(c_int), 1);
 
-// put dwsdx_bisection_inverse(c, y_target) in a 2d table
+// put dwsdx_bisection_inverse(c, y_target) in a 3d table
 dwsdx_inverse_lut(c_int, y_target,bottom_top) =
+  ba.tabulateNd(1, dwsdx_bisection_inverse,
+                (nrShapes, inverseTableSize, 2,
+                 0, 0, 0,
+                 nrShapes, 1, 1,
+                 c_int,y_target, bottom_top)
+               ).cub;
+old_dwsdx_inverse_lut(c_int, y_target,bottom_top) =
   select2(bottom_top
          , ba.tabulateNd(0, dwsdx_bisection_inverse_bottom,
                          (nrShapes, inverseTableSize,
@@ -352,7 +361,7 @@ dwsdx_inverse_lut(c_int, y_target,bottom_top) =
                           nrShapes, 1,
                           c_int,y_target)
                          // TODO: use 2 times .val to bracket
-                        ).lin
+                        ).val
 
          , ba.tabulateNd(0, dwsdx_bisection_inverse_top,
                          (nrShapes, inverseTableSize,
@@ -360,29 +369,61 @@ dwsdx_inverse_lut(c_int, y_target,bottom_top) =
                           nrShapes, 1,
                           c_int,y_target)
                          // TODO: use 2 times .val to bracket
-                        ).lin
+                        ).val
          );
 
 // get val from table above and from table below the y_target we are looking for
 // if dwsdx(c,middle) > y_target
+NR_dwsdx_hybrid_lut_bisection_inverse(c_int, y_target,bottom_top) =
+  invert_dwsdx_NR(dwsdx_inverse_lut(c_int, y_target,bottom_top),c_int, y_target,bottom_top) ;
+
 dwsdx_hybrid_lut_bisection_inverse(c_int, y_target,bottom_top) =
   select2(bottom_top
           // , bisection_inverse_bottom(dwsdx(shape2c(c_int)), y_target, 0, max_c_rdtable(c_int))
           // , bisection_inverse_top(dwsdx(shape2c(c_int)), y_target, max_c_rdtable(c_int), 1)
-         , bisection_inverse_bottom(dwsdx(shape2c(c_int)), y_target
-                                    , dwsdx_inverse_lut(c_int, y_target-(0.01/inverseTableSize),bottom_top)
-                                    , dwsdx_inverse_lut(c_int, y_target+(0.01/inverseTableSize),bottom_top)
-                                      // , dwsdx_inverse_lut(c_int, y_target-(0.1/inverseTableSize):max(0),bottom_top)
-                                      // , dwsdx_inverse_lut(c_int, y_target+(0.1/inverseTableSize):min(1),bottom_top)
+         , bisection_inverse_bottom(hybrid_iter,dwsdx(shape2c(c_int)), y_target
+                                                                       // error: e-07, with big lut: e-08
+                                                                       // , dwsdx_inverse_lut(c_int, y_target-(0.1/inverseTableSize),bottom_top)
+                                                                       // , dwsdx_inverse_lut(c_int, y_target+(0.1/inverseTableSize),bottom_top)
+                                                                       // error: e-08, but with inverseTableSize = pow(2,14), mostly -e10, except the first: e-09
+                                                                       // , dwsdx_inverse_lut(c_int, y_target-(0.01/inverseTableSize),bottom_top)
+                                                                       // , dwsdx_inverse_lut(c_int, y_target+(0.01/inverseTableSize),bottom_top)
+                                                                       // error: e-07, with big lut: e-11
+
+                                                                       // , dwsdx_inverse_lut(c_int, (y_target-(0.0001/inverseTableSize)):max(0) , bottom_top)
+                                                                       // , dwsdx_inverse_lut(c_int, (y_target+(0.0001/inverseTableSize)):min(1) , bottom_top)
+
+
+                                                                       //TODO: optimize the delta
+                                                                       // , dwsdx_inverse_lut(c_int, (y_target-(0.0000001/inverseTableSize)), bottom_top)
+                                                                       // , dwsdx_inverse_lut(c_int, (y_target+(0.0000001/inverseTableSize)), bottom_top)
+                                    , dwsdx_inverse_lut(c_int, (y_target-(0.00000001/inverseTableSize)), bottom_top)
+                                    , dwsdx_inverse_lut(c_int, (y_target+(0.00000001/inverseTableSize)), bottom_top)
+
+                                      // error: e-07, with big lut: e-10
+                                      // , dwsdx_inverse_lut(c_int, y_target-(0.00001/inverseTableSize),bottom_top)
+                                      // , dwsdx_inverse_lut(c_int, y_target+(0.00001/inverseTableSize),bottom_top)
                                    )
-         , bisection_inverse_top(dwsdx(shape2c(c_int)), y_target, max_c_rdtable(c_int), 1)
-         );
+         , bisection_inverse_top(hybrid_iter,dwsdx(shape2c(c_int)), y_target
+                                 , dwsdx_inverse_lut(c_int, y_target+(0.01/inverseTableSize),bottom_top)
+                                 , dwsdx_inverse_lut(c_int, y_target-(0.01/inverseTableSize),bottom_top)
+                                )
+         )
+  // TODO: remove this fix for 1st val
+  <:(select2(
+        abs(dwsdx(shape2c(c_int),_)-y_target)
+        >
+        abs(dwsdx(shape2c(c_int),dwsdx_inverse_lut(c_int, y_target , bottom_top))-y_target)
+      , _,
+      dwsdx_inverse_lut(c_int, y_target , bottom_top))
+    )
+;
 
 // Bisection search for inverse: finds x such that f(c,x) == y
 
-bisection_inverse_bottom(f, y, start, end) =
+bisection_inverse_bottom(iter,f, y, start, end) =
   new_left_right(f, y, start, end)
-  : seq(i, max_iter, new_left_right(f, y))
+  : seq(i, iter, new_left_right(f, y))
     :>_/2 // At the end, mid is the best estimate
 with {
   // Compute new [left, right] bounds
@@ -396,9 +437,9 @@ with {
   new_right(f, y, left, right) = select2(val > y, right, mid);
 };
 };
-bisection_inverse_top(f, y, start, end) =
+bisection_inverse_top(iter,f, y, start, end) =
   new_left_right(f, y, start, end)
-  : seq(i, max_iter, new_left_right(f, y))
+  : seq(i, iter, new_left_right(f, y))
     :>_/2 // At the end, mid is the best estimate
 with {
   // Compute new [left, right] bounds
@@ -595,3 +636,32 @@ declare tabulate author "Stephane Letz";
 ternary_iter = 128;
 // ternary_iter = 64;
 // ternary_iter = 32;
+// # Newton-Raphson solver
+invert_dwsdx_NR(x0,c_int, y_target,bottom_top) =
+  x0:seq(i, hybrid_iter, newton_block)
+with {
+  // top starts at 1-ma.EPSILON
+  // x0 = select2(bottom_top,ma.EPSILON, 1-ma.EPSILON);
+  // x0 = select2(bottom_top,0.001, 0.999);
+  // start = hslider("start", ma.EPSILON, ma.EPSILON, 1, 0.001);
+  // x0 = select2(bottom_top,start, 1-start);
+  newton_block(prev_x) = prev_x + (-F / J)
+                         :max(0):min(1)
+
+                                 // <: select2(bottom_top
+                                 // , max(0):min(max_c_rdtable(c_int))
+                                 // , max(max_c_rdtable(c_int),min(1)))
+
+                                 // :max(0):min(hslider("maximum", 3, 0.5, 3, 0.001))
+                                 // :max(0):min(ternary_search_max(dwsdx,0,1,shape2c(c_int)))
+  with {
+  F = dwsdx(shape2c(c_int), prev_x) - y_target;
+  J = second_dwsdx(shape2c(c_int), prev_x);
+  // J = select2(checkbox("safe"), unsafe_J, safe_J);
+  unsafe_J = second_dwsdx(shape2c(c_int), prev_x);
+  // Avoid divide-by-zero
+  safe_J = (abs(second_dwsdx(shape2c(c_int), prev_x)):max(ma.EPSILON)) * sign(second_dwsdx(shape2c(c_int), prev_x));
+  // ba.signum multiplies by 0 if x is 0
+  sign(x) = (x>=0)-(x<0);
+};
+};
