@@ -2,6 +2,9 @@
 all the curves:
 https://www.desmos.com/calculator/tjiyiyxmva
 
+alternative approach:
+https://www.desmos.com/calculator/2o8ghtbueb
+
 ## What is this?
 
 shapedSmoother is a smoother that allows you to define the shape of the step response in a formula.  

@@ -11,7 +11,11 @@ import("max_c.lib");
 
 * nother method:
 ** get prev_delta
-** calc matching
+** calc matching phase
+ so that the stepsize at phase matches prev_delta
+not the "+ step" we have now
+** keep track of the nr of steps till the next time the totalStep increases
+** calculate the actual stepsize using that, so that we are never to early or too late
 
 * TODO:
 * make self-correcting when using fullDif
@@ -210,34 +214,43 @@ maxShape = 2.42;
 
 inverseTargetDerivativeBottom(y) =
   // NR_dwsdx_hybrid_lut_bisection_inverse(0, y, 0);
-  dwsdx_hybrid_lut_bisection_inverse(0, y, 0);
-// dwsdx_inverse_lut(0, y,0);
-// ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI) ;
+
+  // dwsdx_hybrid_lut_bisection_inverse(0, y, 0);
+
+  // dwsdx_inverse_lut(0, y,0);
+  ((0-acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI) ;
 
 inverseTargetDerivativeTop(y) =
   // NR_dwsdx_hybrid_lut_bisection_inverse(0, y, 1);
-  dwsdx_hybrid_lut_bisection_inverse(0, y, 1);
-// dwsdx_inverse_lut(0, y,1);
-// (acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI ;
+
+  // dwsdx_hybrid_lut_bisection_inverse(0, y, 1);
+
+  // dwsdx_inverse_lut(0, y,1);
+  (acos(y/(0.5*ma.PI))+0.5*ma.PI)/ma.PI ;
 
 targetDerivative(x) =
-  dwsdx(shape2c(0), x);
-// 0.5*ma.PI * cos(ma.PI*x-(0.5*ma.PI));
+  // dwsdx(shape2c(0), x);
+  0.5*ma.PI * cos(ma.PI*x-(0.5*ma.PI));
 
 targetCurve(x) =
-  ws(shape2c(0),x);
-// (sin((x-0.5)*ma.PI)+1)*0.5;
+  // ws(shape2c(0),x);
+  (sin((x-0.5)*ma.PI)+1)*0.5;
 
 shapedSmoother(x) =
-  (x:att_env~(_,_,_))
-  :(_,!,!)
+  (x:att_env~(_,_,_,_))
+  // :(_,!,!)
+  :(_,_,!,_)
 with {
-  att_env(prev,prevPhase,prevTotalStep,x) =
+  att_env(prev,prevPhase,prevTotalStep,prevCorrection,x) =
     select2(attacking,x,
             (speed *step)+prev)
     :min(x)
+     // :max(test2@att_samples)
   , newPhase
   , totalStep
+  , correction
+    // , actualNrSteps/totalNRSteps-.5
+    // , assumedNrSteps/totalNRSteps-.5
   with {
 
   // which mult factor do we need to match the speed we had previously?
@@ -257,7 +270,8 @@ with {
           // :hbargraph("shaper", 0, 2)
   ;
   prevSpeed =
-    prevTotalStep * targetDerivative(prevPhase+step);
+    // prevTotalStep * targetDerivative(prevPhase+step*prevCorrection);
+    prevTotalStep * targetDerivative(prevPhase);
 
   gonnaDo(phase) =
     (1-
@@ -266,32 +280,58 @@ with {
     totalStep
   ;
 
+  phaseAtMatchingSpeed =
+    select2(
+      gonnaMakeIt
+    , inverseTargetDerivativeBottom(prevSpeed/totalStep)
+    , inverseTargetDerivativeTop(prevSpeed/totalStep)
+    ): max(0);
+
+  gonnaMakeIt =
+    gonnaDo(inverseTargetDerivativeTop(prevSpeed/totalStep))
+    +prev
+
+    >=x
+    // )
+  ;
   newPhase =
     (phaseAtMatchingSpeed
-     : max(0)
-       * attacking
-    )
-    :min(1)
-     // :hbargraph("phase", 0, 1)
-  with {
-    phaseAtMatchingSpeed =
-      select2(
-        gonnaMakeIt
-      , inverseTargetDerivativeBottom(prevSpeed/totalStep)
-      , inverseTargetDerivativeTop(prevSpeed/totalStep)
-      );
-    gonnaMakeIt =
-      gonnaDo(inverseTargetDerivativeTop(prevSpeed/totalStep))
-      +prev
 
-      >=x
-      // )
-    ;
-  };
+    )
+    +step
+    // :min(1)
+    :min(1-step)
+     * attacking
+     // :hbargraph("phase", 0, 1)
+  ;
+  // with {
+
+  correction =
+    (
+      (assumedNrSteps/actualNrSteps):min(1)
+      :seq(i, 8, si.smooth(hslider("smoo", 0.999, 0, 1, 0.001)
+                           // *0.1+0.9
+                          ))
+       -1)
+    * hslider("cor factor", 1, 0, 1, 0.001)
+    *-1
+    :pow(hslider("cor pow", 1, 0.5, 8, 0.001))
+     *-1
+     +1
+  ;
+  // correction = actualNrSteps/assumedNrSteps;
+  assumedNrSteps = ((1-phaseAtMatchingSpeed) * totalNRSteps):max(1);
+  actualNrSteps =
+    // (select2(totalStep>totalStep',_-1:max(0),totalNRSteps):max(1))~_;
+    (select2(x>x',_-1:max(0),totalNRSteps):max(1))~_;
+  // };
 
 
   totalNRSteps = att*ma.SR;
-  step = (1/(totalNRSteps));
+  step = (1/(totalNRSteps))
+         * correction
+         // * prevCorrection
+  ;
 };
 
 };
@@ -329,6 +369,21 @@ testSig = os.lf_sawpos(0.5)<:(
 // https://www.desmos.com/calculator/cog4ujr7cs
 // simplified further:
 // https://www.desmos.com/calculator/yiwvcjiony
+//
+// alternative version:
+// https://www.desmos.com/calculator/c67dn2elsm
+// alternative that (should) have a inverse derivative:
+// https://www.desmos.com/calculator/kpfnc2owuo
+// https://www.desmos.com/calculator/viimzqdyjs
+// now with actual inverse derivative:
+// https://www.desmos.com/calculator/9tsibpfbcn
+//
+// New curves by nuchi:
+// https://www.wolframalpha.com/input?i=antiderivative+of+x%281-x%29%2F%28c+*+x%5E2+%2B+1+-+c%29
+// https://www.wolframalpha.com/input?i=inverse+function+of+x%281-x%29%2F%28c+*+x%5E2+%2B+1+-+c%29+%2F+C
+// https://www.desmos.com/calculator/9wtfhymvr0
+// with scaling for c:
+// https://www.desmos.com/calculator/dynyjjkuli
 
 f(k,x) =
   (1-exp(k*x))
@@ -356,6 +411,24 @@ maxSampleRate = 48000;
 tableSize(48000) = 1<<16;
 tableSize(96000) = 1<<17;
 tableSize(sr) = 1<<18;
+
+
+cheapCurveBase(c,x) =
+  (log(c(pow(x,2)-1)+1)+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2x)/2c;
+
+curveScale(c) = cheapCurveBase(c,1)/cheapCurveBase(c,0);
+
+cheapCurve(c,x) = (cheapCurveBase(c,x)-cheapCurveBase(c,0)) / curveScale(c);
+
+derivativeBase(c,x) = x(1-x)/(c*pow(x,2)+1-c);
+
+derivative(c,x) = derivativeBase(c,x)/curveScale(c);
+
+inverseDerivativePart(c,x) =
+  sqrt(1-4(curveScale(c)*x - c*curveScale(c)*x)*(c*curveScale(c)*x+1));
+
+inverseDerivativeTop(c,x) = (1+inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
+inverseDerivativeBottom(c,x) = (1-inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
 
 newCurve(releasing,c,x) =
   select2(releasing
