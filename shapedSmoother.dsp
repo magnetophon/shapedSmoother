@@ -179,9 +179,10 @@ process =
   // testSig,
   // shapedSmoother(testSig);
 
-  test2@att_samples,
-  shapedSmoother(test2:ba.slidingMax(att_samples,maxHold*maxSR));
+  // test2@att_samples,
+  // shapedSmoother(test2:ba.slidingMax(att_samples,maxHold*maxSR));
 
+  cheapCurve(hslider("shape", 0.001, 0.001, 0.999, 0.001),os.lf_sawpos(5));
 // shapedSmoother(x);
 
 // y_target = hslider("y", 0, 0, 1, 0.001)*max_c_lut(c);
@@ -414,9 +415,9 @@ tableSize(sr) = 1<<18;
 
 
 cheapCurveBase(c,x) =
-  (log(c(pow(x,2)-1)+1)+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2x)/2c;
+  (log(c*(pow(x,2)-1)+1)+ 2*sqrt((1/c)-1) *atan(x/sqrt((1/c)-1))-2*x)/(2*c);
 
-curveScale(c) = cheapCurveBase(c,1)/cheapCurveBase(c,0);
+curveScale(c) = cheapCurveBase(c,1)-cheapCurveBase(c,0);
 
 cheapCurve(c,x) = (cheapCurveBase(c,x)-cheapCurveBase(c,0)) / curveScale(c);
 
