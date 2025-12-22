@@ -182,7 +182,13 @@ process =
   // test2@att_samples,
   // shapedSmoother(test2:ba.slidingMax(att_samples,maxHold*maxSR));
 
-  cheapCurve(hslider("shape", 0.001, 0.001, 0.999, 0.001),os.lf_sawpos(5));
+  cheapCurve(shape,sig)
+, derivative(shape,sig)*0.1
+with {
+  shape = shapeMap(hslider("shape", 0, 0, 1, 0.001));
+  sig = os.lf_sawpos(5);
+};
+
 // shapedSmoother(x);
 
 // y_target = hslider("y", 0, 0, 1, 0.001)*max_c_lut(c);
@@ -421,7 +427,7 @@ curveScale(c) = cheapCurveBase(c,1)-cheapCurveBase(c,0);
 
 cheapCurve(c,x) = (cheapCurveBase(c,x)-cheapCurveBase(c,0)) / curveScale(c);
 
-derivativeBase(c,x) = x(1-x)/(c*pow(x,2)+1-c);
+derivativeBase(c,x) = x*(1-x)/(c*pow(x,2)+1-c);
 
 derivative(c,x) = derivativeBase(c,x)/curveScale(c);
 
@@ -430,6 +436,8 @@ inverseDerivativePart(c,x) =
 
 inverseDerivativeTop(c,x) = (1+inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
 inverseDerivativeBottom(c,x) = (1-inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
+
+shapeMap(c) = 1 - 0.9999 * exp(-8.2 * pow(c, 1.3));
 
 newCurve(releasing,c,x) =
   select2(releasing
