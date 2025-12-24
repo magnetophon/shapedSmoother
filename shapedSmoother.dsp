@@ -179,15 +179,15 @@ process =
   // testSig,
   // shapedSmoother(testSig);
 
-  // test2@att_samples,
-  // shapedSmoother(test2:ba.slidingMax(att_samples,maxHold*maxSR));
+  test2@att_samples,
+  shapedSmoother(test2:ba.slidingMax(att_samples,maxHold*maxSR));
 
-  cheapCurve(shape,sig)
-, derivative(shape,sig)*0.1
-with {
-  shape = shapeMap(hslider("shape", 0, 0, 1, 0.001));
-  sig = os.lf_sawpos(5);
-};
+// cheapCurve(shape,sig)
+// , derivative(shape,sig)*0.1
+// with {
+// shape = shapeMap(hslider("shape", 0, 0, 1, 0.001));
+// sig = os.lf_sawpos(5);
+// };
 
 // shapedSmoother(x);
 
@@ -244,18 +244,18 @@ targetCurve(x) =
   (sin((x-0.5)*ma.PI)+1)*0.5;
 
 shapedSmoother(x) =
-  (x:att_env~(_,_,_,_))
+  (x:att_env~(_,_,_))
   // :(_,!,!)
-  :(_,_,!,_)
+  // :(_,_,!,_)
 with {
-  att_env(prev,prevPhase,prevTotalStep,prevCorrection,x) =
+  att_env(prev,prevPhase,prevTotalStep,x) =
     select2(attacking,x,
             (speed *step)+prev)
     :min(x)
      // :max(test2@att_samples)
   , newPhase
   , totalStep
-  , correction
+    // , correction
     // , actualNrSteps/totalNRSteps-.5
     // , assumedNrSteps/totalNRSteps-.5
   with {
@@ -264,6 +264,7 @@ with {
   // plug that into inverseTargetDerivative to get the phase
 
 
+  shape = shapeMap(hslider("shape", 0, 0, 1, 0.001));
 
   attacking = (prev<x)*(att>0);
 
@@ -273,16 +274,16 @@ with {
       * attacking;
 
 
-  speed = totalStep* targetDerivative(newPhase)
+  speed = totalStep* derivative(shape,newPhase)
           // :hbargraph("shaper", 0, 2)
   ;
   prevSpeed =
     // prevTotalStep * targetDerivative(prevPhase+step*prevCorrection);
-    prevTotalStep * targetDerivative(prevPhase);
+    prevTotalStep * derivative(shape,prevPhase);
 
   gonnaDo(phase) =
     (1-
-     targetCurve(phase)
+     cheapCurve(shape,phase)
     )*
     totalStep
   ;
@@ -290,12 +291,12 @@ with {
   phaseAtMatchingSpeed =
     select2(
       gonnaMakeIt
-    , inverseTargetDerivativeBottom(prevSpeed/totalStep)
-    , inverseTargetDerivativeTop(prevSpeed/totalStep)
+    , inverseDerivativeBottom(shape,prevSpeed/totalStep)
+    , inverseDerivativeTop(shape,prevSpeed/totalStep)
     ): max(0);
 
   gonnaMakeIt =
-    gonnaDo(inverseTargetDerivativeTop(prevSpeed/totalStep))
+    gonnaDo(inverseDerivativeTop(shape,prevSpeed/totalStep))
     +prev
 
     >=x
@@ -336,7 +337,7 @@ with {
 
   totalNRSteps = att*ma.SR;
   step = (1/(totalNRSteps))
-         * correction
+         // * correction
          // * prevCorrection
   ;
 };
@@ -391,6 +392,8 @@ testSig = os.lf_sawpos(0.5)<:(
 // https://www.desmos.com/calculator/9wtfhymvr0
 // with scaling for c:
 // https://www.desmos.com/calculator/dynyjjkuli
+// with flip horizontal:
+// https://www.desmos.com/calculator/bsr8cdn21v
 
 f(k,x) =
   (1-exp(k*x))
@@ -425,14 +428,14 @@ cheapCurveBase(c,x) =
 
 curveScale(c) = cheapCurveBase(c,1)-cheapCurveBase(c,0);
 
-cheapCurve(c,x) = (cheapCurveBase(c,x)-cheapCurveBase(c,0)) / curveScale(c);
+cheapCurve(c,x) = ((cheapCurveBase(c,x)-cheapCurveBase(c,0)) / curveScale(c));
 
 derivativeBase(c,x) = x*(1-x)/(c*pow(x,2)+1-c);
 
 derivative(c,x) = derivativeBase(c,x)/curveScale(c);
 
 inverseDerivativePart(c,x) =
-  sqrt(1-4(curveScale(c)*x - c*curveScale(c)*x)*(c*curveScale(c)*x+1));
+  sqrt(1-4*(curveScale(c)*x - c*curveScale(c)*x)*(c*curveScale(c)*x+1));
 
 inverseDerivativeTop(c,x) = (1+inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
 inverseDerivativeBottom(c,x) = (1-inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
