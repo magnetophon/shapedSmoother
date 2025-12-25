@@ -275,34 +275,31 @@ with {
   ;
 
 
-  speed = totalStep* derivative(shape,newPhase)
-          // :hbargraph("shaper", 0, 2)
-  ;
+  speed = totalStep* derivative(shape,newPhase) ;
+
   prevSpeed =
-    // prevTotalStep * targetDerivative(prevPhase+step*prevCorrection);
     prevTotalStep * derivative(shape,prevPhase);
 
   gonnaDo(phase) =
     (1-
      cheapCurve(shape,phase)
     )*
-    totalStep
-  ;
+    totalStep;
 
   phaseAtMatchingSpeed =
     select2(
       gonnaMakeIt
     , inverseDerivativeTop(shape,prevSpeed/totalStep)
     , inverseDerivativeBottom(shape,prevSpeed/totalStep)
-    ): max(0);
+    )
+    // : max(0)
+  ;
 
   gonnaMakeIt =
     gonnaDo(inverseDerivativeTop(shape,prevSpeed/totalStep))
     +prev
-
-    >=x
-    // )
-  ;
+    >=x;
+  // >x;
   newPhase =
     (phaseAtMatchingSpeed
      +step
@@ -312,34 +309,8 @@ with {
      * attacking
      // :hbargraph("phase", 0, 1)
   ;
-  // with {
-
-  correction =
-    (
-      (assumedNrSteps/actualNrSteps):min(1)
-      :seq(i, 8, si.smooth(hslider("smoo", 0.999, 0, 1, 0.001)
-                           // *0.1+0.9
-                          ))
-       -1)
-    * hslider("cor factor", 1, 0, 1, 0.001)
-    *-1
-    :pow(hslider("cor pow", 1, 0.5, 8, 0.001))
-     *-1
-     +1
-  ;
-  // correction = actualNrSteps/assumedNrSteps;
-  assumedNrSteps = ((1-phaseAtMatchingSpeed) * totalNRSteps):max(1);
-  actualNrSteps =
-    // (select2(totalStep>totalStep',_-1:max(0),totalNRSteps):max(1))~_;
-    (select2(x>x',_-1:max(0),totalNRSteps):max(1))~_;
-  // };
-
-
   totalNRSteps = att*ma.SR;
-  step = (1/(totalNRSteps))
-         // * correction
-         // * prevCorrection
-  ;
+  step = (1/(totalNRSteps)) ;
 };
 
 };
