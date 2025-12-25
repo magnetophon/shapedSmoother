@@ -180,7 +180,7 @@ process =
   // shapedSmoother(testSig);
 
   test2@att_samples,
-  shapedSmoother(test2:ba.slidingMax(att_samples,maxHold*maxSR));
+  shapedSmoother(test2:ba.slidingMin(att_samples,maxHold*maxSR));
 
 // cheapCurve(shape,sig)
 // , derivative(shape,sig)*0.1
@@ -251,7 +251,7 @@ with {
   att_env(prev,prevPhase,prevTotalStep,x) =
     select2(attacking,x,
             (speed *step)+prev)
-    :min(x)
+    :max(x)
      // :max(test2@att_samples)
   , newPhase
   , totalStep
@@ -266,12 +266,13 @@ with {
 
   shape = shapeMap(hslider("shape", 0, 0, 1, 0.001));
 
-  attacking = (prev<x)*(att>0);
+  attacking = (prev>x)*(att>0);
 
   totalStep =
     (x-prev)
-    : max(prevTotalStep)
-      * attacking;
+    : min(prevTotalStep)
+      * attacking
+  ;
 
 
   speed = totalStep* derivative(shape,newPhase)
@@ -291,8 +292,8 @@ with {
   phaseAtMatchingSpeed =
     select2(
       gonnaMakeIt
-    , inverseDerivativeBottom(shape,prevSpeed/totalStep)
     , inverseDerivativeTop(shape,prevSpeed/totalStep)
+    , inverseDerivativeBottom(shape,prevSpeed/totalStep)
     ): max(0);
 
   gonnaMakeIt =
@@ -304,9 +305,8 @@ with {
   ;
   newPhase =
     (phaseAtMatchingSpeed
-
+     +step
     )
-    +step
     // :min(1)
     :min(1-step)
      * attacking
