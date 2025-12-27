@@ -275,28 +275,29 @@ with {
   ;
 
 
-  speed = totalStep* derivative(shape,newPhase) ;
+  speed = totalStep* derivativeAttack(shape,newPhase) ;
 
   prevSpeed =
-    prevTotalStep * derivative(shape,prevPhase);
+    prevTotalStep * derivativeAttack(shape,prevPhase);
 
   gonnaDo(phase) =
     (1-
-     cheapCurve(shape,phase)
+     cheapCurveAttack(shape,phase)
     )*
     totalStep;
 
   phaseAtMatchingSpeed =
     select2(
       gonnaMakeIt
-    , inverseDerivativeTop(shape,prevSpeed/totalStep)
-    , inverseDerivativeBottom(shape,prevSpeed/totalStep)
+    , inverseDerivativeBottomAttack(shape,prevSpeed/totalStep)
+    , inverseDerivativeTopAttack(shape,prevSpeed/totalStep)
     )
     // : max(0)
   ;
 
   gonnaMakeIt =
-    gonnaDo(inverseDerivativeTop(shape,prevSpeed/totalStep))
+    // gonnaDo(inverseDerivativeTopAttack(shape,prevSpeed/totalStep))
+    gonnaDo(inverseDerivativeBottomAttack(shape,prevSpeed/totalStep))
     +prev
     >=x;
   // >x;
@@ -399,17 +400,23 @@ cheapCurveBase(c,x) =
 
 curveScale(c) = cheapCurveBase(c,1)-cheapCurveBase(c,0);
 
-cheapCurve(c,x) = ((cheapCurveBase(c,x)-cheapCurveBase(c,0)) / curveScale(c));
+cheapCurveRelease(c,x) = ((cheapCurveBase(c,x)-cheapCurveBase(c,0)) / curveScale(c));
 
-derivativeBase(c,x) = x*(1-x)/(c*pow(x,2)+1-c);
+cheapCurveAttack(c,x) = cheapCurveRelease(c,x*-1+1)*-1+1;
 
-derivative(c,x) = derivativeBase(c,x)/curveScale(c);
+derivativeBaseRelease(c,x) = x*(1-x)/(c*pow(x,2)+1-c);
+derivativeBaseAttack(c,x) = x*(1-x)/(c*pow(x,2)+1-(2*c*x));
+
+derivativeRelease(c,x) = derivativeBaseRelease(c,x)/curveScale(c);
+derivativeAttack(c,x) = derivativeBaseAttack(c,x)/curveScale(c);
 
 inverseDerivativePart(c,x) =
   sqrt(1-4*(curveScale(c)*x - c*curveScale(c)*x)*(c*curveScale(c)*x+1));
 
-inverseDerivativeTop(c,x) = (1+inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
-inverseDerivativeBottom(c,x) = (1-inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
+inverseDerivativeTopRelease(c,x) = (1+inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
+inverseDerivativeBottomRelease(c,x) = (1-inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
+inverseDerivativeTopAttack(c,x) = inverseDerivativeTopRelease(c,x)*-1+1;
+inverseDerivativeBottomAttack(c,x) = inverseDerivativeBottomRelease(c,x)*-1+1;
 
 shapeMap(c) = 1 - 0.9999 * exp(-8.2 * pow(c, 1.3));
 
