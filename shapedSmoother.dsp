@@ -6,6 +6,9 @@ declare copyright "2025 - 2025, Bart Brouns";
 
 import("stdfaust.lib");
 
+// TODO: use the other formulas and see if that fixes the bug
+// TODO: maybe the difference between the instant derivative and the sample to sample one is the cause
+
 process =
   test2@(att_samples),
   shapedSmoother(test2:ba.slidingMin(att_samples+1,1+maxHold*maxSR));
@@ -13,8 +16,8 @@ process =
 shapedSmoother(x) =
   (x:att_env~(_,_,_))
   // :(_,!,!)
-  // :(_,_,!,_)
-  // :(_,!,!,_,_)
+  :(_,_,!,_)
+   // :(_,!,!,_,_)
 with {
   att_env(prev,prevPhase,prevTotalStep,x) =
     select2(attacking,x,
@@ -23,6 +26,8 @@ with {
      // :max(test2@att_samples)
   , newPhase
   , totalStep
+    // , select2(attacking,0,(gonnaDo(inverseDerivativeBottomAttack(shape,prevSpeed/totalStep))+prev))
+  , x
   with {
 
   shape = shapeMap(hslider("shape", 0, 0, 1, 0.001));
@@ -44,8 +49,8 @@ with {
   gonnaDo(phase) =
     (1-
      cheapCurveAttack(shape,phase)
-    )*
-    totalStep;
+     // cheapCurveAttack(shape,phase+step)
+    )* totalStep;
 
   phaseAtMatchingSpeed =
     select2(
@@ -53,15 +58,14 @@ with {
     , inverseDerivativeBottomAttack(shape,prevSpeed/totalStep)
     , inverseDerivativeTopAttack(shape,prevSpeed/totalStep)
     )
-    // : max(0)
   ;
 
   gonnaMakeIt =
     // gonnaDo(inverseDerivativeTopAttack(shape,prevSpeed/totalStep))
     gonnaDo(inverseDerivativeBottomAttack(shape,prevSpeed/totalStep))
     +prev
-    >=x;
-  // >x;
+    // >=x;
+    >x;
   newPhase =
     (phaseAtMatchingSpeed
      +step
@@ -130,7 +134,8 @@ derivativeRelease(c,x) = derivativeBaseRelease(c,x)/curveScale(c);
 derivativeAttack(c,x) = derivativeBaseAttack(c,x)/curveScale(c);
 
 inverseDerivativePart(c,x) =
-  sqrt(1-4*(curveScale(c)*x - c*curveScale(c)*x)*(c*curveScale(c)*x+1));
+  // sqrt(1-4*(curveScale(c)*x - c*curveScale(c)*x)*(c*curveScale(c)*x+1));
+  sqrt(max(0,1-4*(curveScale(c)*x - c*curveScale(c)*x)*(c*curveScale(c)*x+1)));
 
 inverseDerivativeTopRelease(c,x) = (1+inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
 inverseDerivativeBottomRelease(c,x) = (1-inverseDerivativePart(c,x)) / (2*(c*curveScale(c)*x+1));
