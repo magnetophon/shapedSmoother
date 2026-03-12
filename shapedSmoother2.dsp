@@ -17,10 +17,13 @@ with {
   , totalStep
   , x
   with {
-    shape = shapeMap(hslider("shape", 0, 0, 1, 0.001));
-    attacking = (prev>x)*(att>0);
-    releasing = (prev<x)*(rel>0);
-    active = attacking | releasing;
+  shape =
+    shapeMap(select2(releasing
+                    ,hslider("attack shape", 0, 0, 1, 0.001)
+                    ,hslider("release shape", 0, 0, 1, 0.001)));
+  attacking = (prev>x) & (att>0);
+  releasing = (prev<x) & (rel>0);
+  active = attacking | releasing;
 
     // Time base depends on direction
     activeTime = select2(releasing, att, rel);
