@@ -71,9 +71,9 @@ shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
 maxHold = 0.05;
 // maxSR = 192000;
 maxSR = 48000;
-att = hslider("att[scale:log]", 0.005*1000, 1, maxHold*1000, 0.001)/1000;
+att = hslider("att[scale:log]", 0.005*1000, 0.001, maxHold*1000, 0.001)/1000;
 att_samples = att*ma.SR:max(1);
-rel = hslider("rel[scale:log]", 0.05*1000, 1, 500, 0.001)/1000;
+rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000;
 // Test signal
 test2 = it.interpolate_linear(hslider("noise level", 0, 0, 1, 0.001),
     (loop~_),
