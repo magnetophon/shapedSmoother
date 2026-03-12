@@ -24,7 +24,7 @@ shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
                 // Total step: min for attack (negative), max for release (positive)
                 totalStep = select2(releasing,
                     (x-prev):min(prevTotalStep),
-                    (x-prev):max(prevTotalStep));
+                    (x-prev):max(prevTotalStep))*active;
                 safeTotalStep = select2(abs(totalStep)>1e-30, 1, totalStep);
 
                 // Attack curve: slow start, fast end. Release curve: fast start, slow end.
