@@ -79,7 +79,8 @@ test2 = it.interpolate_linear(hslider("noise level", 0, 0, 1, 0.001),
     (loop~_),
     no.lfnoise(hslider("noise rate", 42, 1, 1000, 1)))
     with {
-        loop(prev) = no.lfnoise0(abs(prev*69)%9:pow(0.75)*5+1);
+        loop(prev) = no.lfnoise0(blockscale*(abs(prev*69)%9:pow(0.75)*5+1));
+        blockscale = hslider("blockscale", 1, 0.01, 10, 0.01);
     };
 testSig = os.lf_sawpos(0.5)<:(((_>0.25)*hslider("step1", 0.75, -1, 1, 0.001))+((_>0.5)*hslider("step2", 0.125, -1, 1, 0.001)));
 // *************************************** the NEW curves: ******************************
