@@ -18,7 +18,7 @@ shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
 
                 // Time base depends on direction
                 activeTime = select2(releasing, att, rel);
-                totalNRSteps = activeTime*ma.SR;
+                totalNRSteps = (activeTime*ma.SR):max(1);
                 step = 1/totalNRSteps;
 
                 // Total step: min for attack (negative), max for release (positive)
@@ -71,7 +71,7 @@ shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
 maxHold = 0.05;
 // maxSR = 192000;
 maxSR = 48000;
-att = hslider("att[scale:log]", 0.005*1000, 0.001, maxHold*1000, 0.001)/1000;
+att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.001)/1000;
 att_samples = att*ma.SR:max(1);
 rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000;
 // Test signal
