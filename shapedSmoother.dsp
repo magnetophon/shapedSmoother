@@ -4,10 +4,12 @@ declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
 import("stdfaust.lib");
-process = test2@(att_samples), shapedSmoother(test2:ba.slidingMin(att_samples+1, 1+maxHold*maxSR));
+
+process = test2@att_samples, shapedSmoother(test2:ba.slidingMin(att_samples+1, 1+maxHold*maxSR));
+
 shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
     with {
-        env(prev, prevPhase, prevTotalStep, x) = result, newPhase, totalStep, x
+        env(prev, prevPhase, prevTotalStep, x) = result, newPhase, totalStep, gonnaMakeIt
             with {
                 shape = shapeMap(select2(releasing,
                     hslider("attack shape", 0, 0, 1, 0.001),
