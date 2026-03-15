@@ -45,20 +45,20 @@ shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
                     cheapCurveAttack(shape, phase),
                     cheapCurveRelease(shape, phase)))*totalStep;
 
-                // Attack: safe if projected position stays above target (> x)
-                // Release: safe if projected position stays below target (< x)
+                // TODO: find proper fix for wrong values of gonnaMakeIt, these "+step*0.x" are just a workaround
                 projected = gonnaDo(select2(releasing,
-                    inverseDerivativeBottomAttack(shape, clampedRatio),
-                    inverseDerivativeTopRelease(shape, clampedRatio)))+prev;
-                gonnaMakeIt = select2(releasing, projected>x, projected<x);
+                    inverseDerivativeBottomAttack(shape, clampedRatio)+(step*0.3),
+                    inverseDerivativeTopRelease(shape, clampedRatio)+(step*0.5))// +(step*hslider("step mult", 0, 0, 1, 0.1))
+                )+prev;
+                gonnaMakeIt = (projected>x);
 
                 phaseAtMatchingSpeed = select2(releasing,
                     select2(gonnaMakeIt,
                         inverseDerivativeBottomAttack(shape, clampedRatio),
                         inverseDerivativeTopAttack(shape, clampedRatio)),
                     select2(gonnaMakeIt,
-                        inverseDerivativeTopRelease(shape, clampedRatio),
-                        inverseDerivativeBottomRelease(shape, clampedRatio)));
+                        inverseDerivativeBottomRelease(shape, clampedRatio),
+                        inverseDerivativeTopRelease(shape, clampedRatio)));
 
                 newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(step)*active;
 
