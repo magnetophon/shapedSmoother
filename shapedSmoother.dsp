@@ -27,13 +27,11 @@ shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
                 totalStep = select2(releasing,
                     (x-prev):min(prevTotalStep),
                     (x-prev):max(prevTotalStep))*active;
-                safeTotalStep = select2(abs(totalStep)>1e-30, 1, totalStep);
 
                 // Attack curve: slow start, fast end. Release curve: fast start, slow end.
                 prevSpeed = prevTotalStep*select2(releasing,
                     derivativeAttack(shape, prevPhase),
                     derivativeRelease(shape, prevPhase));
-                // speedRatio = prevSpeed/safeTotalStep*(abs(totalStep)>1e-30);
                 speedRatio = prevSpeed/totalStep;
                 clampedRatio = max(0, min(speedRatio, maxDerivativeAttack(shape)));
 
