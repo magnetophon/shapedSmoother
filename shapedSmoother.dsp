@@ -5,17 +5,19 @@ declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
 import("stdfaust.lib");
 
-process = test2@att_samples, shapedSmoother(test2:ba.slidingMin(att_samples+1, 1+maxHold*maxSR));
+process = test2@att_samples, shapedSmoother(test2);
 
-shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
+shapedSmoother(x) = (lookaheadX:env~(_, _, _))//:(_, _, !, _)
+// :(_, !, !)
     with {
-        env(prev, prevPhase, prevTotalStep, x) = result, newPhase, totalStep, gonnaMakeIt
+        lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR);
+        env(prev, prevPhase, prevTotalStep, lookaheadX) = result, newPhase, totalStep//, gonnaMakeIt
             with {
                 shape = shapeMap(select2(releasing,
                     hslider("attack shape", 0, 0, 1, 0.001),
                     hslider("release shape", 0, 0, 1, 0.001)));
-                attacking = (prev>x)&(att>0);
-                releasing = (prev<x)&(rel>0);
+                attacking = (prev>lookaheadX)&(att>0);
+                releasing = (prev<lookaheadX)&(rel>0);
                 active = attacking|releasing;
 
                 // Time base depends on direction
@@ -25,8 +27,8 @@ shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
 
                 // Total step: min for attack (negative), max for release (positive)
                 totalStep = select2(releasing,
-                    (x-prev):min(prevTotalStep),
-                    (x-prev):max(prevTotalStep))*active;
+                    (lookaheadX-prev):min(prevTotalStep),
+                    (lookaheadX-prev):max(prevTotalStep))*active;
 
                 // Attack curve: slow start, fast end. Release curve: fast start, slow end.
                 prevSpeed = prevTotalStep*select2(releasing,
@@ -48,7 +50,7 @@ shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
                     inverseDerivativeBottomAttack(shape, clampedRatio)+(step*0.3),
                     inverseDerivativeTopRelease(shape, clampedRatio)+(step*0.5))// +(step*hslider("step mult", 0, 0, 1, 0.1))
                 )+prev;
-                gonnaMakeIt = (projected>x);
+                gonnaMakeIt = (projected>lookaheadX);
 
                 phaseAtMatchingSpeed = select2(releasing,
                     select2(gonnaMakeIt,
@@ -60,11 +62,8 @@ shapedSmoother(x) = (x:env~(_, _, _)):(_, _, !, _)
 
                 newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(step)*active;
 
-                // Output: attack clamps below with max(x), release clamps above with min(x)
                 shaped = (speed*step)+prev;
-                result = select2(releasing,
-                    shaped:max(x),
-                    shaped:min(x));
+                result = min(shaped, x@att_samples);
             };
     };
 // Parameters
