@@ -5,13 +5,14 @@ declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
 import("stdfaust.lib");
 
-process = test2@att_samples, shapedSmoother(test2);
+process = test2@brake_samples, shapedSmoother(test2);
 
-shapedSmoother(x) = (lookaheadX:env~(_, _, _))//:(_, _, !, _)
-// :(_, !, !)
+shapedSmoother(x) = (lookaheadX:env~(_, _, _)):(_, _, !, _)// :(_, !, !)
     with {
-        lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR);
-        env(prev, prevPhase, prevTotalStep, lookaheadX) = result, newPhase, totalStep//, gonnaMakeIt
+        lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR)@half_att_samples;
+        lookaheadBrake = x:ba.slidingMin(brake_samples+1, 1+1.5*maxHold*maxSR);
+        env(prev, prevPhase, prevTotalStep, lookaheadX) = result, newPhase, totalStep, braking//, gonnaMakeIt
+        // , lookaheadBrake
             with {
                 shape = shapeMap(select2(releasing,
                     hslider("attack shape", 0, 0, 1, 0.001),
@@ -62,8 +63,16 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))//:(_, _, !, _)
 
                 newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(step)*active;
 
-                shaped = (speed*step)+prev;
-                result = min(shaped, x@att_samples);
+                braking = (prev>=lookaheadBrake)&(attacking==0);
+                brake_mult = output~_
+                    with {
+                        step = 1.0/half_att_samples;
+                        output(prev) = (1-braking)+braking*max(0, prev-step);
+                    };
+
+                shaped = (speed*brake_mult*step)+prev;
+                // result = shaped;
+                result = min(shaped, x@brake_samples);
             };
     };
 // Parameters
@@ -72,6 +81,8 @@ maxHold = 0.05;
 maxSR = 48000;
 att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.001)/1000;
 att_samples = att*ma.SR:max(1);
+half_att_samples = (0.5*att_samples):max(1);
+brake_samples = 1.5*att*ma.SR:max(1);
 rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000;
 // Test signal
 test2 = it.interpolate_linear(hslider("noise level", 0, 0, 1, 0.001),
