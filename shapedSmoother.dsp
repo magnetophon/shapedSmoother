@@ -1,89 +1,110 @@
 declare name "shapedSmoother";
-declare version "0.2";
+declare version "0.3";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
 import("stdfaust.lib");
 
-process = test2@brake_samples, shapedSmoother(test2);
+process = test2@att_samples, shapedSmoother(test2);
 
-shapedSmoother(x) = (lookaheadX:env~(_, _, _)):(_, _, !, _)// :(_, !, !)
+shapedSmoother(x) = x//
+:releaseEnv~(_, _, _)//
+//:(_, !, !)//
+:(_, _, !)//
+:attackEnv~(_, _, _):(_, _, !, _)
     with {
-        lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR)@half_att_samples;
-        lookaheadBrake = x:ba.slidingMin(brake_samples+1, 1+1.5*maxHold*maxSR);
-        env(prev, prevPhase, prevTotalStep, lookaheadX) = result, newPhase, totalStep, braking//, gonnaMakeIt
-        // , lookaheadBrake
+        // Release envelope: smooths upward movement, no lookahead.
+        // When not releasing, tracks input instantly (passes through drops).
+        releaseEnv(prev, prevPhase, prevTotalStep, x) = result, newPhase, totalStep//
             with {
-                shape = shapeMap(select2(releasing,
-                    hslider("attack shape", 0, 0, 1, 0.001),
-                    hslider("release shape", 0, 0, 1, 0.001)));
-                attacking = (prev>lookaheadX)&(att>0);
-                releasing = (prev<lookaheadX)&(rel>0);
-                active = attacking|releasing;
+                shape = shapeMap(hslider("release shape", 0, 0, 1, 0.001));
+                releasing = (prev<x)&(rel>0);
+                active = releasing;
 
-                // Time base depends on direction
-                activeTime = select2(releasing, att, rel);
-                totalNRSteps = (activeTime*ma.SR):max(1);
+                totalNRSteps = (rel*ma.SR):max(1);
                 step = 1/totalNRSteps;
 
-                // Total step: min for attack (negative), max for release (positive)
-                totalStep = select2(releasing,
-                    (lookaheadX-prev):min(prevTotalStep),
-                    (lookaheadX-prev):max(prevTotalStep))*active;
+                totalStep = ((x-prev):max(prevTotalStep))*active;
 
-                // Attack curve: slow start, fast end. Release curve: fast start, slow end.
-                prevSpeed = prevTotalStep*select2(releasing,
-                    derivativeAttack(shape, prevPhase),
-                    derivativeRelease(shape, prevPhase));
+                prevSpeed = prevTotalStep*derivativeRelease(shape, prevPhase);
                 speedRatio = prevSpeed/totalStep;
                 clampedRatio = max(0, min(speedRatio, maxDerivativeAttack(shape)));
 
-                speed = totalStep*select2(releasing,
-                    derivativeAttack(shape, newPhase),
-                    derivativeRelease(shape, newPhase));
+                speed = totalStep*derivativeRelease(shape, newPhase);
 
-                gonnaDo(phase) = (1-select2(releasing,
-                    cheapCurveAttack(shape, phase),
-                    cheapCurveRelease(shape, phase)))*totalStep;
+                gonnaDo(phase) = (1-cheapCurveRelease(shape, phase))*totalStep;
 
-                // TODO: find proper fix for wrong values of gonnaMakeIt, these "+step*0.x" are just a workaround
-                projected = gonnaDo(select2(releasing,
-                    inverseDerivativeBottomAttack(shape, clampedRatio)+(step*0.3),
-                    inverseDerivativeTopRelease(shape, clampedRatio)+(step*0.5))// +(step*hslider("step mult", 0, 0, 1, 0.1))
-                )+prev;
-                gonnaMakeIt = (projected>lookaheadX);
+                projected = gonnaDo(inverseDerivativeTopRelease(shape, clampedRatio)+(step*0.5))+prev;
+                gonnaMakeIt = (projected>x);
 
-                phaseAtMatchingSpeed = select2(releasing,
-                    select2(gonnaMakeIt,
-                        inverseDerivativeBottomAttack(shape, clampedRatio),
-                        inverseDerivativeTopAttack(shape, clampedRatio)),
-                    select2(gonnaMakeIt,
-                        inverseDerivativeBottomRelease(shape, clampedRatio),
-                        inverseDerivativeTopRelease(shape, clampedRatio)));
+                phaseAtMatchingSpeed = select2(gonnaMakeIt,
+                    inverseDerivativeBottomRelease(shape, clampedRatio),
+                    inverseDerivativeTopRelease(shape, clampedRatio));
 
                 newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(step)*active;
 
-                braking = (prev>=lookaheadBrake)&(attacking==0);
-                brake_mult = output~_
-                    with {
-                        step = 1.0/half_att_samples;
-                        output(prev) = (1-braking)+braking*max(0, prev-step);
-                    };
+                shaped = (speed*step)+prev;
+                // When not active, pass through x so prev tracks input (instant drop-following).
+                // min(_, x) clamps release overshoot.
+                result = min(select2(active, x, shaped), x);
+            };
 
-                shaped = (speed*brake_mult*step)+prev;
-                // result = shaped;
-                result = min(shaped, x@brake_samples);
+        // Attack envelope: smooths downward movement, with lookahead.
+        // When not attacking, tracks input instantly (passes through rises).
+        attackEnv(prev, prevPhase, prevTotalStep, y, releasePhase) = result, newPhase, totalStep//
+        , releasePhase@att_samples*(active==0)//
+        // , result<=lookaheadY
+            with {
+                lookaheadY = y:ba.slidingMin(att_samples+1, 1+maxHold*maxSR);
+
+                shape = shapeMap(hslider("attack shape", 0, 0, 1, 0.001));
+                attacking = (prev>=lookaheadY)&(att>0);
+                active = attacking;
+                holding = (attacking==0)&((y@att_samples-step)>prev)&(prevPhase>0);
+
+                totalNRSteps = (att*ma.SR):max(1);
+                step = 1/totalNRSteps;
+
+                totalStep = ((lookaheadY-prev):min(prevTotalStep))*active;
+
+                prevSpeed = prevTotalStep*derivativeAttack(shape, prevPhase);
+                speedRatio = prevSpeed/totalStep;
+                clampedRatio = max(0, min(speedRatio, maxDerivativeAttack(shape)));
+
+                speed = totalStep*derivativeAttack(shape, newPhase);
+
+                gonnaDo(phase) = (1-cheapCurveAttack(shape, phase))*totalStep;
+
+                projected = gonnaDo(inverseDerivativeBottomAttack(shape, clampedRatio)+(step*0.3))+prev;
+                gonnaMakeIt = (projected>lookaheadY);
+
+                phaseAtMatchingSpeed = select2(gonnaMakeIt,
+                    inverseDerivativeBottomAttack(shape, clampedRatio),
+                    inverseDerivativeTopAttack(shape, clampedRatio));
+
+                // newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(step)*active;
+                newPhase = select2(holding,
+                    (phaseAtMatchingSpeed+step):min(1-step):max(step)*active,
+                    prevPhase);
+
+                shaped = (speed*step)+prev;
+                // When not active, pass through y@att_samples so prev tracks input (instant rise-following).
+                // min(_, y@att_samples) clamps attack overshoot.
+                // result = min(select2(active, y@att_samples, shaped), y@att_samples);
+                // result = select2(active, y@att_samples, shaped);
+                result = select2(active, select2(holding, y@att_samples, prev), shaped);
             };
     };
+
 // Parameters
 maxHold = 0.05;
-// maxSR = 192000;
 maxSR = 48000;
 att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.001)/1000;
 att_samples = att*ma.SR:max(1);
 half_att_samples = (0.5*att_samples):max(1);
 brake_samples = 1.5*att*ma.SR:max(1);
 rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000;
+
 // Test signal
 test2 = it.interpolate_linear(hslider("noise level", 0, 0, 1, 0.001),
     (loop~_),
@@ -92,16 +113,10 @@ test2 = it.interpolate_linear(hslider("noise level", 0, 0, 1, 0.001),
         loop(prev) = no.lfnoise0(blockscale*(abs(prev*69)%9:pow(0.75)*5+1));
         blockscale = hslider("blockscale", 1, 0.01, 10, 0.01);
     };
+
 testSig = os.lf_sawpos(0.5)<:(((_>0.25)*hslider("step1", 0.75, -1, 1, 0.001))+((_>0.5)*hslider("step2", 0.125, -1, 1, 0.001)));
+
 // *************************************** the NEW curves: ******************************
-// New curves by nuchi:
-// https://www.wolframalpha.com/input?i=antiderivative+of+x%281-x%29%2F%28c+*+x%5E2+%2B+1+-+c%29
-// https://www.wolframalpha.com/input?i=inverse+function+of+x%281-x%29%2F%28c+*+x%5E2+%2B+1+-+c%29+%2F+C
-// https://www.desmos.com/calculator/9wtfhymvr0
-// with scaling for c:
-// https://www.desmos.com/calculator/dynyjjkuli
-// with flip horizontal:
-// https://www.desmos.com/calculator/bsr8cdn21v
 cheapCurveBase(c, x) = (log(c*(pow(x, 2)-1)+1)+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2*x)/(2*c);
 curveScale(c) = cheapCurveBase(c, 1)-cheapCurveBase(c, 0);
 cheapCurveRelease(c, x) = (cheapCurveBase(c, x)-cheapCurveBase(c, 0))/curveScale(c);
