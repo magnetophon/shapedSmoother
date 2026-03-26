@@ -23,11 +23,12 @@ shapedSmoother(x) = x//
         // , (releasing@(brake_samples))//
         // , ((prev@half_att_samples)>lookaheadHalf)//
         // , ((prev@att_samples)>(lookaheadHalf@half_att_samples))//
-        // , brake_mult@half_att_samples//
+        //, ((prev<result)@(brake_samples))//, brake_mult//
         // , ((result@half_att_samples)*brake_mult)@att_samples//
-        , ((result@brake_samples)*brake_mult)//
+        //, ((result@brake_samples)*brake_mult)//
+        , brake_mult//
         //                                                             , shaped_brake// , result@brake_samples//
-        // , result_brake// , result@brake_samples//
+        //, result_brake// , result@brake_samples//
         // , releaseEnd@half_att_samples//                                                         
         // , notSmooth@half_att_samples//                                                         
         // , lookaheadHalf@half_att_samples// , rampDown(half_att_samples,
@@ -58,8 +59,8 @@ shapedSmoother(x) = x//
                 ;
                 // releaseEnd = ((((((lookaheadRel+step)>prev):ba.impulsify)))&((prev<result)@(half_att_samples)));
                 // releaseEnd = ((((((lookaheadHalf+step)>prev):ba.impulsify)))@half_att_samples//
-                releaseEnd = ((((((lookaheadX+step)>prev):ba.impulsify)))// &((prev<result)@(half_att_samples))
-                );
+                releaseEnd = ((((((lookaheadX+step)>prev):ba.impulsify)))&((prev<result)@(brake_samples)));
+                // TODO: use dif instead?
                 notSmooth = ((newPhase<0.95)@att_samples);
                 // releaseEnd = ((((((lookaheadRel+step)>prev):ba.impulsify)))&((prev<result)));
                 // notSmooth = ((newPhase<0.95));
