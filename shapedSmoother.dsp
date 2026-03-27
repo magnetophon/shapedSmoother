@@ -46,7 +46,7 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                         maxDerivativeBaseAttack(shape)));
 
                 // Phase from unscaled inverse (no curveScale in the computation)
-                newPhaseRaw = newPhaseFromSpeed+step;
+                newPhaseRaw = phaseAtMatchingSpeed+step;
 
                 gonnaDo(phase) = (1-select2(releasing,
                     cheapCurveAttack(shape, phase),
@@ -60,7 +60,7 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                     inverseDerivativeTopRelease(shape, clampedRatio)))+prev;
                 gonnaMakeIt = (projected>lookaheadX);
 
-                newPhaseFromSpeed = select2(releasing,
+                phaseAtMatchingSpeed = select2(releasing,
                     select2(gonnaMakeIt,
                         inverseDerivativeBottomAttack(shape, clampedRatio),
                         inverseDerivativeTopAttack(shape, clampedRatio)),
