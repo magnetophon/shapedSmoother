@@ -77,8 +77,10 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                     derivativeAttack(shape, newPhase),
                     derivativeRelease(shape, newPhase));
 
-                shaped = (speed*step)+prev;
-                result = min(shaped, x@att_samples);
+                result = min(prev+delta, x@att_samples);
+                delta = todo*todoMult;
+                // make delta dependent on how much GR we have to do until the full lookahead, so it self corrects
+                todoMult = speed*step/todo;
             };
     };
 
