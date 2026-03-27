@@ -11,9 +11,6 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
     with {
         lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR);
 
-        // CHANGE 1: State is now (prev, prevPhase, prevTotalStep)
-        //   instead of (prev, prevIndex, prevTotalStep).
-        //   This eliminates the index↔phase quantization round-trip.
         env(prev, prevPhase, prevTotalStep, lookaheadX) = result, newPhase, totalStep
             with {
                 shape = shapeMap(select2(releasing,
@@ -27,16 +24,20 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                 totalNRSteps = (activeTime*ma.SR):max(1);
                 step = 1/totalNRSteps;
 
+                // make delta dependent on how much GR we have to do until the full lookahead, so it self corrects
+
+                todo = lookaheadX-prev;
+
+                remainingCurve = 1-select2(releasing,
+                    cheapCurveAttack(shape, prevPhase),
+                    cheapCurveRelease(shape, prevPhase));
+                new_totalStep = todo/max(1/totalNRSteps, remainingCurve);
+                // totalStep = todo/remainingCurve;
+
                 totalStep = select2(releasing,
                     (lookaheadX-prev):min(prevTotalStep),
                     (lookaheadX-prev):max(prevTotalStep))*active;
 
-                // CHANGE 2: Use unscaled (base) derivatives throughout the
-                //   inverse path. This avoids dividing by curveScale in the
-                //   forward derivative, only to multiply it back inside
-                //   inverseDerivativePart. The curveScale round-trip was
-                //   amplifying error because curveScale is itself the result
-                //   of log/atan transcendentals.
                 prevSpeedUnscaled = prevTotalStep*select2(releasing,
                     derivativeBaseAttack(shape, prevPhase),
                     derivativeBaseRelease(shape, prevPhase));
@@ -68,8 +69,6 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                         inverseDerivativeBottomReleaseUnscaled(shape, clampedRatioUnscaled),
                         inverseDerivativeTopReleaseUnscaled(shape, clampedRatioUnscaled)));
 
-                // CHANGE 1 cont'd: Phase is clamped directly in [step, 1-step],
-                //   no multiply-to-index then divide-back-to-phase.
                 newPhase = newPhaseRaw:min(1-step):max(step)*active;
 
                 // Final output still uses the scaled derivative (needed for
@@ -133,20 +132,6 @@ maxDerivativeBaseAttack(c) = derivativeBaseAttack(c, peakPhaseAttack(c));
 // Scaled version kept for reference / other uses
 maxDerivativeAttack(c) = derivativeAttack(c, peakPhaseAttack(c));
 
-// CHANGE 3: Unscaled inverse derivative functions.
-//
-// The original inverseDerivativePart computed:
-//   sqrt(1 - 4*(S*d - c*S*d)*(c*S*d + 1))
-// where S = curveScale(c) and d = scaled derivative value.
-//
-// Substituting D = S*d (unscaled derivative) gives:
-//   sqrt(1 - 4*D*(1-c)*(c*D + 1))
-//
-// This is algebraically identical but numerically superior:
-//   - Fewer multiplications (no S*d products)
-//   - Smaller intermediate values → less cancellation risk
-//   - D is bounded by the raw derivative peak, which is O(1),
-//     whereas S*d could have S >> 1 for extreme shapes
 inverseDerivativePartUnscaled(c, D) = sqrt(max(0, 1-4*D*(1-c)*(c*D+1)));
 
 inverseDerivativeTopReleaseUnscaled(c, D) = (1+inverseDerivativePartUnscaled(c, D))/(2*(c*D+1));
