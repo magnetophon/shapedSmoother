@@ -85,7 +85,7 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
 // Parameters
 maxHold = 0.05;
 maxSR = 48000;
-att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.001)/1000;
+att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01)/1000;
 att_samples = att*ma.SR:max(1);
 half_att_samples = (0.5*att_samples):max(1);
 rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000;
