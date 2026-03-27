@@ -40,7 +40,7 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                 prevSpeed = prevTotalStep*select2(releasing,
                     derivativeBaseAttack(shape, prevPhase),
                     derivativeBaseRelease(shape, prevPhase));
-                speedRatio = prevSpeed/totalStep;
+                speedRatio = prevSpeed/prevTotalStep;
                 clampedRatio = max(0,
                     min(speedRatio,
                         maxDerivativeBaseAttack(shape)));
