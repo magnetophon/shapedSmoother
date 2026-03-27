@@ -37,12 +37,12 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                     (lookaheadX-prev):min(prevTotalStep),
                     (lookaheadX-prev):max(prevTotalStep))*active;
 
-                prevSpeedUnscaled = prevTotalStep*select2(releasing,
+                prevSpeed = prevTotalStep*select2(releasing,
                     derivativeBaseAttack(shape, prevPhase),
                     derivativeBaseRelease(shape, prevPhase));
-                speedRatioUnscaled = prevSpeedUnscaled/totalStep;
-                clampedRatioUnscaled = max(0,
-                    min(speedRatioUnscaled,
+                speedRatio = prevSpeed/totalStep;
+                clampedRatio = max(0,
+                    min(speedRatio,
                         maxDerivativeBaseAttack(shape)));
 
                 // Phase from unscaled inverse (no curveScale in the computation)
@@ -56,17 +56,17 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                 // workarounds should no longer be needed — the inverse
                 // functions receive the exact unscaled value they expect.
                 projected = gonnaDo(select2(releasing,
-                    inverseDerivativeBottomAttackUnscaled(shape, clampedRatioUnscaled),
-                    inverseDerivativeTopReleaseUnscaled(shape, clampedRatioUnscaled)))+prev;
+                    inverseDerivativeBottomAttack(shape, clampedRatio),
+                    inverseDerivativeTopRelease(shape, clampedRatio)))+prev;
                 gonnaMakeIt = (projected>lookaheadX);
 
                 newPhaseFromSpeed = select2(releasing,
                     select2(gonnaMakeIt,
-                        inverseDerivativeBottomAttackUnscaled(shape, clampedRatioUnscaled),
-                        inverseDerivativeTopAttackUnscaled(shape, clampedRatioUnscaled)),
+                        inverseDerivativeBottomAttack(shape, clampedRatio),
+                        inverseDerivativeTopAttack(shape, clampedRatio)),
                     select2(gonnaMakeIt,
-                        inverseDerivativeBottomReleaseUnscaled(shape, clampedRatioUnscaled),
-                        inverseDerivativeTopReleaseUnscaled(shape, clampedRatioUnscaled)));
+                        inverseDerivativeBottomRelease(shape, clampedRatio),
+                        inverseDerivativeTopRelease(shape, clampedRatio)));
 
                 newPhase = newPhaseRaw:min(1-step):max(step)*active;
 
@@ -130,16 +130,16 @@ maxDerivativeBaseAttack(c) = derivativeBaseAttack(c, peakPhaseAttack(c));
 // Scaled version kept for reference / other uses
 maxDerivativeAttack(c) = derivativeAttack(c, peakPhaseAttack(c));
 
-inverseDerivativePartUnscaled(c, D) = sqrt(max(0, 1-4*D*(1-c)*(c*D+1)));
+inverseDerivativePart(c, D) = sqrt(max(0, 1-4*D*(1-c)*(c*D+1)));
 
-inverseDerivativeTopReleaseUnscaled(c, D) = (1+inverseDerivativePartUnscaled(c, D))/(2*(c*D+1));
+inverseDerivativeTopRelease(c, D) = (1+inverseDerivativePart(c, D))/(2*(c*D+1));
 
-inverseDerivativeBottomReleaseUnscaled(c, D) = (1-inverseDerivativePartUnscaled(c, D))/(2*(c*D+1));
+inverseDerivativeBottomRelease(c, D) = (1-inverseDerivativePart(c, D))/(2*(c*D+1));
 
 // Attack inverses via the same horizontal-flip relationship
-inverseDerivativeTopAttackUnscaled(c, D) = 1-inverseDerivativeTopReleaseUnscaled(c, D);
+inverseDerivativeTopAttack(c, D) = 1-inverseDerivativeTopRelease(c, D);
 
-inverseDerivativeBottomAttackUnscaled(c, D) = 1-inverseDerivativeBottomReleaseUnscaled(c, D);
+inverseDerivativeBottomAttack(c, D) = 1-inverseDerivativeBottomRelease(c, D);
 
 // Original scaled versions kept for reference
 inverseDerivativePart(c, x) = sqrt(max(0, 1-4*(curveScale(c)*x-c*curveScale(c)*x)*(c*curveScale(c)*x+1)));
