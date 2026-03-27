@@ -6,7 +6,6 @@ declare copyright "2025 - 2026, Bart Brouns";
 import("stdfaust.lib");
 
 process = test2@att_samples, shapedSmoother(test2);
-
 shapedSmoother(x) = (lookaheadX:env~(_, _, _))
     with {
         lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR);
