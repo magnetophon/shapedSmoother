@@ -46,7 +46,7 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                         maxDerivativeBaseAttack(shape)));
 
                 // Phase from unscaled inverse (no curveScale in the computation)
-                newPhaseRaw = phaseAtMatchingSpeed+step;
+                newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(step)*active;
 
                 gonnaDo(phase) = (1-select2(releasing,
                     cheapCurveAttack(shape, phase),
@@ -67,8 +67,6 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                     select2(gonnaMakeIt,
                         inverseDerivativeBottomRelease(shape, clampedRatio),
                         inverseDerivativeTopRelease(shape, clampedRatio)));
-
-                newPhase = newPhaseRaw:min(1-step):max(step)*active;
 
                 // Final output still uses the scaled derivative (needed for
                 // the actual envelope value computation)
