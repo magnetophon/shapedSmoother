@@ -23,18 +23,21 @@ lessSteepDown = linearProj<lookaheadBrake;
 // dirToPoint(dir, point, nr) =
 
 process = test2@att_samples, att_env(test2);
-att_env(x) = env~(_, _, _)//
+att_env(x) = env~(_, _, _, _)//
 // :(_, (_*att_samples), !, _)//
 :(_, !, !, _, _)//
 // :(_, (_*att_samples), (_*att_samples), !)
     with {
-        env(prevSmoother, prevDelta, prevTargetRate) = smoother, delta, targetRate, targetSameCounter, trigger//, LA
+        env(prevSmoother, prevDelta, prevTargetRate, prevTargetSameCounter) = smoother, delta, targetRate, targetSameCounter, trigger//, LA
             with {
-                trigger = abs(delta-prevDelta)>trigThres;
-                trigThres = (0.0001*hslider("comp", 0.001, 0.001, 1, 0.001))/totalNRSteps;
-                remainingSteps = max(1, (1-targetSameCounter)*totalNRSteps);
-                // targetRate = ((LA-prevSmoother)/remainingSteps)*derivativeAttack(shape, targetSameCounter);
-                targetRate = ((LA-prevSmoother)/totalNRSteps)<:select2(releasing, min(_, prevTargetRate), max(_, prevTargetRate));
+                // trigger = abs(delta-prevDelta)>trigThres;
+                trigger = abs(targetRate-prevTargetRate)>trigThres;
+                trigThres = (0.0001*hslider("comp", 0.05, 0.001, 1, 0.001))/totalNRSteps;
+                // remainingSteps = max(1, (1-targetSameCounter)*totalNRSteps);
+                remainingSteps = max(1, (1-prevTargetSameCounter)*totalNRSteps);
+                targetRate = ((LA-prevSmoother)/remainingSteps)<:select2(releasing, min(_, prevTargetRate), max(_, prevTargetRate));
+                // targetRate = ((LA-prevSmoother)/totalNRSteps)<:select2(releasing, min(_, prevTargetRate), max(_, prevTargetRate));
+                // targetRate = ((LA-prevSmoother)/remainingSteps)<:select2(releasing, min(_, prevTargetRate), max(_, prevTargetRate));
                 //remainingSteps;
                 // delta = (prevDelta, targetRate):it.interpolate_linear(blendFactor);
                 delta = targetRate;
@@ -52,7 +55,7 @@ att_env(x) = env~(_, _, _)//
 
                 // delta = (prevDelta, targetRate*targetSameCounter):it.interpolate_linear(targetSameCounter);
                 // delta = (prevDelta, targetRate):it.interpolate_linear(targetSameCounter:cheapCurveAttack(shape));
-                smoother = (prevSmoother+delta):min(x@att_samples);
+                smoother = (prevSmoother+delta):min(x@att_samples):max(LA);
                 targetSameCounter = ((_+step)*same:min(1))~_;
                 LA = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR);
                 // delta = // delta = ((derivativeAttack(shape, targetSameCounter)));
