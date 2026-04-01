@@ -5,13 +5,70 @@ declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
 import("stdfaust.lib");
 
-process = test2@att_samples, shapedSmoother(test2);
-shapedSmoother(x) = (lookaheadX:env~(_, _, _))
-    with {
-        lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR);
+// lookahead array 
+// LA1diff*0.5 
+// LA2
+// 
+// check if:
+// - we need to go down steeper than we are going now -> 
+linearProj = prev+(n*prevDelta);
+steeperDown = linearProj>lookaheadBrake;
+keepSpeed = linearProj==lookaheadBrake;
+lessSteepDown = linearProj<lookaheadBrake;
+// keep count of how many samples the LA has been the same
+// keep count of how many samples the LA has gone down
+// 
+// 
+//
+// dirToPoint(dir, point, nr) =
 
-        env(prev, prevPhase, prevTotalStep, lookaheadX) = result, newPhase, totalStep
+process = test2@att_samples, att_env(test2);
+att_env(x) = env~(_, _, _)//:(_, _, !, _)
+    with {
+        env(prevSmoother, prevDelta, prevTargetSameCounter) = smoother, delta, targetSameCounter//, LA
             with {
+                remainingSteps = max(1, (1-targetSameCounter)*totalNRSteps);
+                targetRate = (LA-prevSmoother)/remainingSteps;
+                delta = (prevDelta, targetRate):it.interpolate_linear(blendFactor);
+                blendPow = hslider("blend curve", 3, 1, 8, 0.1);
+                // blendFactor = pow(targetSameCounter, blendPow);
+                // blendFactor = cheapCurveAttack(shape, targetSameCounter);
+                blendK = hslider("blend curve", 5, 1, 10, 0.1);
+                blendFactor = ((exp(blendK*targetSameCounter)-1)/max(1e-10, exp(blendK)-1));
+
+                // delta = ((derivativeAttack(shape, targetSameCounter)), (LA-prevSmoother)):it.interpolate_linear(targetSameCounter);
+
+                // delta = (prevDelta, targetRate*targetSameCounter):it.interpolate_linear(targetSameCounter);
+                // delta = (prevDelta, targetRate):it.interpolate_linear(targetSameCounter:cheapCurveAttack(shape));
+                smoother = (prevSmoother+delta):min(x@att_samples);
+                targetSameCounter = (prevTargetSameCounter+step)*same:min(1);
+                LA = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR);
+                // delta = // delta = ((derivativeAttack(shape, targetSameCounter)));
+                // ((prevSmoother'-prevSmoother), (LA-prevSmoother)):it.interpolate_linear(targetSameCounter);
+                totalNRSteps = (att*ma.SR):max(1);
+                step = 1/totalNRSteps;
+                same = LA==LA';
+                // lookaheadX==lookaheadBrake;
+                lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR)@half_att_samples;
+                lookaheadBrake = x:ba.slidingMin(brake_samples+1, 1+1.5*maxHold*maxSR);
+
+                shape = shapeMap(hslider("attack shape", 0, 0, 1, 0.001));
+                active = prev!=LA;
+            };
+    };
+
+// lookaheadX(x) = x:ba.slidingMin(32+1, 1+32)@half_att_samples;
+// lookaheadBrake(x) = x:ba.slidingMin(hslider("LA", 0, 0, 32, 1)+1, 32);
+
+// test2@brake_samples, shapedSmoother(test2);
+
+shapedSmoother(x) = (x:env~(_, _, _))//
+//:(_, !, !, _, _)
+    with {
+        env(prev, prevPhase, prevTotalStep, x) = result, newPhase, totalStep//, delta//, lookaheadX, lookaheadBrake
+            with {
+                lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR)@half_att_samples;
+                lookaheadBrake = x:ba.slidingMin(brake_samples+1, 1+1.5*maxHold*maxSR);
                 shape = shapeMap(select2(releasing,
                     hslider("attack shape", 0, 0, 1, 0.001),
                     hslider("release shape", 0, 0, 1, 0.001)));
@@ -33,10 +90,11 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                 new_totalStep = todo/max(1/totalNRSteps, remainingCurve);
                 // totalStep = todo/remainingCurve;
 
-                totalStep = select2(releasing,
-                    (lookaheadX-prev):min(prevTotalStep),
-                    (lookaheadX-prev):max(prevTotalStep))*active;
-
+                // TODO: clamp the totalStep so that the speed at peakPhaseAttack matches the delta 
+                // totalStep = (todo/remainingCurve)<:select2(releasing,
+                totalStep = (todo)<:select2(releasing,
+                    min(prevTotalStep),
+                    max(select2(lookaheadBrake<lookaheadX, prevTotalStep, 0-ma.INFINITY)));
                 prevSpeed = prevTotalStep*select2(releasing,
                     derivativeBaseAttack(shape, prevPhase),
                     derivativeBaseRelease(shape, prevPhase));
@@ -45,19 +103,18 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                     min(speedRatio,
                         maxDerivativeBaseAttack(shape)));
 
-                // Phase from unscaled inverse (no curveScale in the computation)
                 newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(step)*active;
 
                 gonnaDo(phase) = (1-select2(releasing,
                     cheapCurveAttack(shape, phase),
                     cheapCurveRelease(shape, phase)))*totalStep;
 
-                // With the curveScale round-trip eliminated, the +step*0.x
-                // workarounds should no longer be needed — the inverse
-                // functions receive the exact unscaled value they expect.
                 projected = gonnaDo(select2(releasing,
                     inverseDerivativeBottomAttack(shape, clampedRatio),
                     inverseDerivativeTopRelease(shape, clampedRatio)))+prev;
+                projected2 = gonnaDo(select2(releasing,
+                    inverseDerivativeTopAttack(shape, clampedRatio),
+                    inverseDerivativeBottomRelease(shape, clampedRatio)))+prev;
                 gonnaMakeIt = (projected>lookaheadX);
 
                 phaseAtMatchingSpeed = select2(releasing,
@@ -74,7 +131,8 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                     derivativeAttack(shape, newPhase),
                     derivativeRelease(shape, newPhase));
 
-                result = min(prev+speed*step, x@att_samples);
+                delta = speed*step;
+                result = min(prev+delta, x@brake_samples);
             };
     };
 
@@ -82,8 +140,9 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
 maxHold = 0.05;
 maxSR = 48000;
 att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01)/1000;
-att_samples = att*ma.SR:max(1);
-half_att_samples = (0.5*att_samples):max(1);
+half_att_samples = (0.5*att*ma.SR):max(1);
+att_samples = 2*half_att_samples;
+brake_samples = 3*half_att_samples;
 rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000;
 
 // Test signal
