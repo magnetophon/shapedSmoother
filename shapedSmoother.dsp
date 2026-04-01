@@ -24,19 +24,29 @@ lessSteepDown = linearProj<lookaheadBrake;
 
 process = test2@att_samples, att_env(test2);
 att_env(x) = env~(_, _, _)//
-//:(_, _, !, _)
-:(_, _, (_*att_samples), !)
+// :(_, (_*att_samples), !, _)//
+:(_, !, !, _, _)//
+// :(_, (_*att_samples), (_*att_samples), !)
     with {
-        env(prevSmoother, prevDelta, prevTargetRate) = smoother, delta, targetRate, targetSameCounter//, LA
+        env(prevSmoother, prevDelta, prevTargetRate) = smoother, delta, targetRate, targetSameCounter, trigger//, LA
             with {
+                trigger = abs(delta-prevDelta)>trigThres;
+                trigThres = (0.0001*hslider("comp", 0.001, 0.001, 1, 0.001))/totalNRSteps;
                 remainingSteps = max(1, (1-targetSameCounter)*totalNRSteps);
-                targetRate = ((LA-prevSmoother)/remainingSteps);
-                delta = (prevDelta, targetRate):it.interpolate_linear(blendFactor);
+                // targetRate = ((LA-prevSmoother)/remainingSteps)*derivativeAttack(shape, targetSameCounter);
+                targetRate = ((LA-prevSmoother)/totalNRSteps)<:select2(releasing, min(_, prevTargetRate), max(_, prevTargetRate));
+                //remainingSteps;
+                // delta = (prevDelta, targetRate):it.interpolate_linear(blendFactor);
+                delta = targetRate;
+                // delta = (prevDelta, targetInterpolate):it.interpolate_linear(blendFactor);
+                targetInterpolate = (targetRate*derivativeAttack(shape, targetSameCounter), targetRate):it.interpolate_linear(blendFactor2);
                 blendPow = hslider("blend curve", 3, 1, 8, 0.1);
                 // blendFactor = pow(targetSameCounter, blendPow);
                 // blendFactor = cheapCurveAttack(shape, targetSameCounter);
                 blendK = hslider("blend curve", 5, 1, 10, 0.1);
                 blendFactor = ((exp(blendK*targetSameCounter)-1)/max(1e-10, exp(blendK)-1));
+                blendK2 = hslider("blend curve2", 5, 1, 10, 0.1);
+                blendFactor2 = ((exp(blendK2*targetSameCounter)-1)/max(1e-10, exp(blendK2)-1));
 
                 // delta = ((derivativeAttack(shape, targetSameCounter)), (LA-prevSmoother)):it.interpolate_linear(targetSameCounter);
 
@@ -49,13 +59,18 @@ att_env(x) = env~(_, _, _)//
                 // ((prevSmoother'-prevSmoother), (LA-prevSmoother)):it.interpolate_linear(targetSameCounter);
                 totalNRSteps = att_samples;
                 step = 1/totalNRSteps;
-                same = LA==LA';
+                // same = LA==LA';
+                same = 1-trigger;
+                // same= 
                 // lookaheadX==lookaheadBrake;
                 lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR)@half_att_samples;
                 lookaheadBrake = x:ba.slidingMin(brake_samples+1, 1+1.5*maxHold*maxSR);
 
                 shape = shapeMap(hslider("attack shape", 0, 0, 1, 0.001));
-                active = prev!=LA;
+                attacking = (prevSmoother>LA)&(att>0);
+                // releasing = (prevSmoother<LA)&(rel>0);
+                releasing = (prevSmoother<LA);
+                active = attacking|releasing;
             };
     };
 
