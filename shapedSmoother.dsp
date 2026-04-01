@@ -23,12 +23,14 @@ lessSteepDown = linearProj<lookaheadBrake;
 // dirToPoint(dir, point, nr) =
 
 process = test2@att_samples, att_env(test2);
-att_env(x) = env~(_, _, _)//:(_, _, !, _)
+att_env(x) = env~(_, _, _)//
+//:(_, _, !, _)
+:(_, _, (_*att_samples), !)
     with {
-        env(prevSmoother, prevDelta, prevTargetSameCounter) = smoother, delta, targetSameCounter//, LA
+        env(prevSmoother, prevDelta, prevTargetRate) = smoother, delta, targetRate, targetSameCounter//, LA
             with {
                 remainingSteps = max(1, (1-targetSameCounter)*totalNRSteps);
-                targetRate = (LA-prevSmoother)/remainingSteps;
+                targetRate = ((LA-prevSmoother)/remainingSteps);
                 delta = (prevDelta, targetRate):it.interpolate_linear(blendFactor);
                 blendPow = hslider("blend curve", 3, 1, 8, 0.1);
                 // blendFactor = pow(targetSameCounter, blendPow);
@@ -41,11 +43,11 @@ att_env(x) = env~(_, _, _)//:(_, _, !, _)
                 // delta = (prevDelta, targetRate*targetSameCounter):it.interpolate_linear(targetSameCounter);
                 // delta = (prevDelta, targetRate):it.interpolate_linear(targetSameCounter:cheapCurveAttack(shape));
                 smoother = (prevSmoother+delta):min(x@att_samples);
-                targetSameCounter = (prevTargetSameCounter+step)*same:min(1);
+                targetSameCounter = ((_+step)*same:min(1))~_;
                 LA = x:ba.slidingMin(att_samples+1, 1+maxHold*maxSR);
                 // delta = // delta = ((derivativeAttack(shape, targetSameCounter)));
                 // ((prevSmoother'-prevSmoother), (LA-prevSmoother)):it.interpolate_linear(targetSameCounter);
-                totalNRSteps = (att*ma.SR):max(1);
+                totalNRSteps = att_samples;
                 step = 1/totalNRSteps;
                 same = LA==LA';
                 // lookaheadX==lookaheadBrake;
