@@ -1,5 +1,5 @@
 declare name "shapedSmoother";
-declare version "0.4";
+declare version "0.5";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
@@ -41,6 +41,30 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
         attackMaxDeriv  = maxDerivativeBaseAttack(attackShape);
         releaseMaxDeriv = maxDerivativeBaseAttack(releaseShape);
 
+        // NEW in v0.5: hoist the per-shape sub-expressions that the original
+        // cheapCurveBase(c, x) and derivativeBase(c, y) recompute every sample.
+        //
+        //   cheapCurveBase(c, x) =
+        //     (log(c*(x*x-1)+1) + 2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1)) - 2*x)
+        //     / (2*c)
+        //
+        // Per sample the original was paying:
+        //   - 1 div   for (1/c) and 1 sub for ((1/c)-1)
+        //   - 1 sqrt  (the textual sqrt appears twice; relying on the C/Rust
+        //              backend to CSE across an atan() call is iffy, so make
+        //              it explicit)
+        //   - 1 div   for 1/(2*c)
+        //   - 1 sub   for (1-c) inside each derivativeBase (called twice per
+        //              sample) and again inside invPart
+        // Since c is just one of two control-rate values, do all of the
+        // c-only work per shape and select the scalar audio-rate.
+        attackSqrtInvCm1  = sqrt((1/attackShape)  - 1);
+        releaseSqrtInvCm1 = sqrt((1/releaseShape) - 1);
+        attackInvTwoC     = 1/(2*attackShape);
+        releaseInvTwoC    = 1/(2*releaseShape);
+        attackOneMinusC   = 1 - attackShape;
+        releaseOneMinusC  = 1 - releaseShape;
+
         // Pre-split 1/(activeTime*SR) per mode for the same reason.
         attNRSteps = (att*ma.SR):max(1);
         relNRSteps = (rel*ma.SR):max(1);
@@ -60,6 +84,11 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                 zeroVal       = select2(releasing, attackZero,          releaseZero);
                 maxDerivVal   = select2(releasing, attackMaxDeriv,      releaseMaxDeriv);
                 step          = select2(releasing, attStep,             relStep);
+                // v0.5: the c-only sub-expressions used by cheapCurveBase /
+                // derivativeBase / invPart.
+                sqrtInvCm1    = select2(releasing, attackSqrtInvCm1,    releaseSqrtInvCm1);
+                invTwoC       = select2(releasing, attackInvTwoC,       releaseInvTwoC);
+                oneMinusC     = select2(releasing, attackOneMinusC,     releaseOneMinusC);
 
                 todo = lookaheadX-prev;
                 totalStep = select2(releasing,
@@ -70,7 +99,7 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                 // derivativeBaseAttack(c, x) == derivativeBase(c, 1-x), so
                 // both branches collapse into one phase-select + one call.
                 prevY     = select2(releasing, 1-prevPhase, prevPhase);
-                prevSpeed = prevTotalStep * derivativeBase(shape, prevY);
+                prevSpeed = prevTotalStep * derivativeBaseFast(shape, oneMinusC, prevY);
 
                 speedRatio   = prevSpeed/totalStep;
                 clampedRatio = max(0, min(speedRatio, maxDerivVal));
@@ -83,7 +112,7 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                 // simply (1 - their release counterpart) and are folded into
                 // the consumers below rather than computed eagerly.
                 cD1     = shape*clampedRatio + 1;
-                invPart = sqrt(max(0, 1 - 4*clampedRatio*(1-shape)*cD1));
+                invPart = sqrt(max(0, 1 - 4*clampedRatio*oneMinusC*cD1));
                 invDen2 = 1/(2*cD1);
                 topRelease    = (1 + invPart)*invDen2;
                 bottomRelease = (1 - invPart)*invDen2;
@@ -96,7 +125,7 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
                 // release. That eliminates one cheapCurveBase evaluation per
                 // sample (a log + an atan).
                 gonnaDoPhase  = select2(releasing, bottomRelease, topRelease);
-                gonnaDoCurve  = (cheapCurveBase(shape, gonnaDoPhase) - zeroVal) * invCurveScale;
+                gonnaDoCurve  = (cheapCurveBaseFast(shape, sqrtInvCm1, invTwoC, gonnaDoPhase) - zeroVal) * invCurveScale;
                 gonnaDoFactor = select2(releasing, gonnaDoCurve, 1 - gonnaDoCurve);
                 projected     = gonnaDoFactor*totalStep + prev;
                 gonnaMakeIt   = (projected>lookaheadX);
@@ -112,7 +141,7 @@ shapedSmoother(x) = (lookaheadX:env~(_, _, _))
 
                 // ---- Final speed (scaled derivative at newPhase) --------
                 newY  = select2(releasing, 1-newPhase, newPhase);
-                speed = totalStep * derivativeBase(shape, newY) * invCurveScale;
+                speed = totalStep * derivativeBaseFast(shape, oneMinusC, newY) * invCurveScale;
 
                 result = min(prev+speed*step, x@att_samples);
             };
@@ -146,6 +175,12 @@ testSig = os.lf_sawpos(0.5)<:(((_>0.25)*hslider("step1", 0.75, -1, 1, 0.001))+((
 //   horizontal flip: https://www.desmos.com/calculator/bsr8cdn21v
 
 cheapCurveBase(c, x) = (log(c*(x*x-1)+1)+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2*x)/(2*c);
+// v0.5: variant taking precomputed c-only sub-expressions.
+//   sqrtInvCm1 = sqrt((1/c) - 1)
+//   invTwoC    = 1/(2*c)
+// Mathematically identical to cheapCurveBase(c, x).
+cheapCurveBaseFast(c, sqrtInvCm1, invTwoC, x) =
+    (log(c*(x*x-1)+1) + 2*sqrtInvCm1*atan(x/sqrtInvCm1) - 2*x) * invTwoC;
 curveScale(c) = cheapCurveBase(c, 1)-cheapCurveBase(c, 0);
 
 cheapCurveRelease(c, x) = (cheapCurveBase(c, x)-cheapCurveBase(c, 0))/curveScale(c);
@@ -158,6 +193,8 @@ cheapCurveAttack(c, x)  = 1 - cheapCurveRelease(c, 1-x);
 //                              = derivativeBase(c, 1-x)
 // This lets the env() collapse two function calls into one.
 derivativeBase(c, y) = y*(1-y)/(c*y*y + 1 - c);
+// v0.5: variant taking precomputed (1-c). Mathematically identical.
+derivativeBaseFast(c, oneMinusC, y) = y*(1-y)/(c*y*y + oneMinusC);
 
 derivativeBaseRelease(c, x) = derivativeBase(c, x);
 derivativeBaseAttack(c, x)  = derivativeBase(c, 1-x);
