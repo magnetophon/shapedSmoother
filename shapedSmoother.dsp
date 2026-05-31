@@ -26,14 +26,31 @@ import("stdfaust.lib");
 //
 // Everything else is byte-identical to v0.3.
 
-process = test2@(att_samples+brake_samples), shapedSmoother(test2);
+process = test2@(att_samples+brake_samples+rel_hold_samples), shapedSmoother(test2);
 shapedSmoother(x) = lookaheadX:env~(_, _, _)
     with {
-        lookaheadX = x:ba.slidingMin(att_samples+1, 1+maxHoldSamples)@brake_samples;
+        // Release hold, ported from lamb-rs (lamb.dsp `releaseHold` inside
+        // `lookahead_compression_gain_mono`). Sits BEFORE the attack-lookahead
+        // slidingMin, mirroring lamb's pipeline where releaseHold runs before
+        // the SIN smoother's internal slidingMin.
+        //
+        // - `min(prevGain, rawX @ rel_hold_samples)` keeps the output
+        //   monotonically non-rising: once we've gone down, we can't release.
+        // - `slidingMin(rel_hold_samples+1, ...)` is the future-min within the
+        //   hold window: we may go as low as that, but no lower is required.
+        // - max() of those two yields the held value.
+        //
+        // Adds rel_hold_samples of latency on top of att_samples+brake_samples.
+        held = x:(releaseHold~_);
+        releaseHold(prevGain, rawX) = max(min(prevGain, rawX@rel_hold_samples),
+            rawX:ba.slidingMin(rel_hold_samples+1, 1+maxRelHoldSamples));
+
+        lookaheadX = held:ba.slidingMin(att_samples+1, 1+maxHoldSamples)@brake_samples;
 
         // brake: covers an additional brake_samples ahead, used purely for
-        // early attack detection.
-        lookahead_brake = x:ba.slidingMin(att_samples+brake_samples+1, 1+(maxHold+maxBrake)*maxSR);
+        // early attack detection. Uses `held` so the brake sees the same
+        // release-held signal as lookaheadX.
+        lookahead_brake = held:ba.slidingMin(att_samples+brake_samples+1, 1+(maxHold+maxBrake)*maxSR);
         // ---- Hoisted per-shape constants (slider-rate) ----
         // These are pure functions of the shape sliders. Faust's auto-lift
         // doesn't push through `select2(releasing, sliderA, sliderB)` so in
@@ -111,17 +128,19 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                 brakeMult = 1-brakeRamp;
                 delta = speed*step*brakeMult;
 
-                result = min(prev+delta, x@(att_samples+brake_samples));
+                result = min(prev+delta, x@(att_samples+brake_samples+rel_hold_samples));
             };
     };
 
 // Parameters
 maxHold = 0.05;
 maxBrake = 0.05;
+maxRelHold = 0.05;
 maxSR = 48000;
 
 maxHoldSamples = maxHold*maxSR;
 maxBrakeSamples = maxBrake*maxSR;
+maxRelHoldSamples = maxRelHold*maxSR;
 maxTotalSamples = (maxHold+maxBrake)*maxSR;
 
 att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01)/1000;
@@ -129,6 +148,11 @@ att_samples = att*ma.SR:max(1);
 half_att_samples = (0.5*att_samples):max(1);
 rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000;
 rel_samples = rel*ma.SR:max(1);
+
+// Release hold (ported from lamb-rs): linear scale, allows 0 (off).
+// Default 50 ms matches lamb's `[08]release hold`.
+rel_hold = hslider("rel hold[unit:ms]", 50, 0, maxRelHold*1000, 1)*0.001;
+rel_hold_samples = rel_hold*ma.SR;
 
 // Brake window length per spec:
 //   = 50 ms by default,
