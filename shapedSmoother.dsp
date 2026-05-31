@@ -233,3 +233,51 @@ inverseDerivativeBottomAttack(c, D) = 1-inverseDerivativeBottomRelease(c, D);
 // inverseDerivativeBottomAttack(c, x) = inverseDerivativeBottomRelease(c, x)*-1+1;
 
 shapeMap(c) = 1-0.9999*exp(-8.2*pow(c, 1.3));
+
+//============================================================================
+// DJ-style "clip the peaks" gain stage  (mono, feedback topology)
+//
+// Two-state feedback loop produces, per sample:
+//   gain : FAST gain-reduction envelope (instant attack, adaptive release)
+//   ref  : SLOW reference envelope that trails `gain`
+// clipPeaks then crossfades ref -> gain by how far the fast envelope has
+// dipped below ref, and the result is scaled by `strength`.
+//
+// NB: all smoothing is in the LINEAR domain. A *linear* gain RISES when GR is
+// RELEASED, so the att/rel time args to the smoothers are inverted vs the dB
+// intuition. That is deliberate.
+//============================================================================
+DJcompression_gain_mono(strength, thresh, att, rel, knee, level) = loop~(_, _)// feedback states: prevGain, prevRef
+:clipPeaks*strength
+    with {
+        // ref + (gain-ref)*clipMix  ==  lerp(ref -> gain).
+        // clipMix rises 0->1 as the *current* fast GR sinks refBot -> refTop:
+        // small peaks ride `ref`, big peaks follow the fast `gain`.
+        clipPeaks(gain, ref) = ref+fastGRnow*clipMix
+            with {
+                fastGRnow = gain-ref;
+                clipMix = it.remap(refBot, refTop, 0, 1, clamp(refBot, refTop, fastGRnow));
+            };
+
+        loop(prevGain, prevRef) = gain, ref
+            with {
+                fastGR = prevGain-prevRef;
+                // fast GR the loop sees (prev sample)
+
+                // FAST envelope: instant attack; release time set adaptively below.
+                gain = gain_computer(1, thresh, knee, level):ba.db2linear:smootherARorder(maxOrder, orderRel, orderAtt, adaptiveRel, 0):ba.linear2db;
+
+                // deeper fast GR -> longer release (fade_to_inf blows up as relWeight->1).
+                adaptiveRel = fade_to_inf(relWeight, rel)*1@fullLatency;
+                relWeight = 1-it.remap(dvBot, dvTop, 1, 0, clamp(dvBot, dvTop, fastGR));
+
+                // SLOW reference envelope: 1st-order smoother trailing prevGain.
+                ref = (prevGain-dvBot):ba.db2linear:smootherOrder(1, 1, refRel, 0):ba.linear2db;
+
+                // ref release time: log-interpolated between slowRelease and ~infinity.
+                refRel = interpolate_logarithmic(refWeight, slowRelease, slowRelease/ma.EPSILON)*1@fullLatency;
+                refWeight = it.remap(refBot, refTop, 1, 0, clamp(refBot, refTop, fastGR));
+
+                clamp(lo, hi, x) = x:min(hi):max(lo);
+            };
+    };
