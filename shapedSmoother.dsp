@@ -1,10 +1,16 @@
 declare name "shapedSmoother";
-declare version "0.3.3";
+declare version "0.3.4";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
 import("stdfaust.lib");
 
+// v0.3.4 The LUT scales att/rel by aucLevelMult(shape) so changing the shape no longer
+// changes the average level. See the "AUC level compensation" comment on the
+// att/rel sliders and the "AUC level-compensation LUT" block lower down.
+// Folding the factor into att/rel makes the reported latency shape-dependent
+// (largest at the sharpest shape).
+//
 // v0.3.3: fix the release phase failing to reach 1 for some rel/release-shape
 // combinations. The release branch chose its accelerate/decelerate phase via
 // `gonnaMakeIt = projected > lookaheadX`, but for a single step `projected`
@@ -68,8 +74,8 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
         // doesn't push through `select2(releasing, sliderA, sliderB)` so in
         // v0.3 every `cheapCurveBase`/`curveScale`/`maxDerivativeBaseAttack`
         // call on `shape` fires audio-rate. Precompute them per-shape.
-        attackShape = shapeMap(hslider("attack shape", 0, 0, 1, 0.001));
-        releaseShape = shapeMap(hslider("release shape", 0, 0, 1, 0.001));
+        attackShape = shapeMap(attackShapeSlider);
+        releaseShape = shapeMap(releaseShapeSlider);
 
         attackInvCurveScale = 1/curveScale(attackShape);
         releaseInvCurveScale = 1/curveScale(releaseShape);
@@ -177,10 +183,46 @@ maxBrakeSamples = maxBrake*maxSR;
 maxRelHoldSamples = maxRelHold*maxSR;
 maxTotalSamples = (maxHold+maxBrake)*maxSR;
 
-att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01)/1000;
+// Raw shape sliders. Named here so the AUC level-compensation LUT (defined
+// lower in the file) can index them, and so env() can shapeMap() them.
+attackShapeSlider = hslider("attack shape", 0, 0, 1, 0.001);
+releaseShapeSlider = hslider("release shape", 0, 0, 1, 0.001);
+
+// AUC level compensation.
+// Goal: changing the shape must NOT change the average level. A single-step
+// response of duration T has time-area  T * AUC_attack(shape) * step. We scale
+// the duration by  aucLevelMult(shape) = AUC_attack(shapeMap(1)) / AUC_attack(shape),
+// so  T_eff * AUC = const  -> the area is shape-independent. The factor is
+// normalized to <=1 (==1 at the sharpest shape), so durations only ever shorten.
+//
+// We fold the factor straight into att/rel, so the lookahead, brake sizing AND
+// fade speed all use the same compensated duration -> the single-step response
+// stays a pure scaled curve (no early plateau). CONSEQUENCE: the lookahead, and
+// therefore the reported plugin latency, now varies with shape (it is largest
+// at the sharpest shape). The release-hold latency (rel_hold_samples) is a
+// separate, shape-independent term added on top. If you need a FIXED latency
+// instead, leave att/rel here un-scaled and instead multiply only `activeTime`
+// inside env() by
+// select2(releasing, aucLevelMult(attackShapeSlider), aucLevelMult(releaseShapeSlider));
+// that keeps latency constant but reintroduces a shape-dependent plateau that
+// only partially compensates the level.
+
+// On/off for the AUC level compensation, independently for att and rel.
+// When off the multiplier is exactly 1.0, i.e. att/rel revert to the raw
+// slider values — and the reported latency goes back to being
+// shape-independent (see the AUC comment on the att/rel sliders).
+attAucComp = checkbox("att auc comp");
+relAucComp = checkbox("rel auc comp");
+
+// Blend the multiplier toward 1.0 when the switch is off. Branchless on
+// purpose: `on` is 0 or 1 so it's exact, the multiplier is clamped to [0,1]
+// so `on*(m-1)` can't blow up, and this is slider-rate regardless.
+aucLevelMultSwitched(on, s) = 1+on*(aucLevelMult(s)-1);
+
+att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01)/1000*aucLevelMultSwitched(attAucComp, attackShapeSlider);
 att_samples = att*ma.SR:max(1);
 half_att_samples = (0.5*att_samples):max(1);
-rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000;
+rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000*aucLevelMultSwitched(relAucComp, releaseShapeSlider);
 rel_samples = rel*ma.SR:max(1);
 
 // Release hold (ported from lamb-rs): linear scale, allows 0 (off).
@@ -272,6 +314,47 @@ inverseDerivativeBottomAttack(c, D) = 1-inverseDerivativeBottomRelease(c, D);
 // inverseDerivativeBottomAttack(c, x) = inverseDerivativeBottomRelease(c, x)*-1+1;
 
 shapeMap(c) = 1-0.9999*exp(-8.2*pow(c, 1.3));
+
+// ============================================================================
+//  AUC level-compensation LUT
+// ----------------------------------------------------------------------------
+//  Reuses cheapCurveBase / shapeMap defined above. AUC_attack(c) has no
+//  closed form, so it is a midpoint-rule numerical integral; that sum runs
+//  only while the rdtable is filled at init (aucN*aucM evals once), never per
+//  audio sample. Read with linear interpolation.
+//
+//  NOTE: compile with -double. At very small c (shape slider near 0) the
+//  cheapCurveBase formula suffers catastrophic cancellation in single
+//  precision, shifting the low-shape factor by ~0.8%. -double makes it exact.
+// ============================================================================
+aucN = 257;
+// table points across the shape slider range [0,1]
+aucM = 32;
+// midpoint integration steps (init-time only; M=32 -> AUC err ~2e-7)
+
+// AUC_attack reduced algebraically to a SINGLE integral of cheapCurveBase:
+//   cheapCurveAttack(c,x) = 1 - (base(c,1-x)-base(c,0))/scale,  scale=base(c,1)-base(c,0)
+//   => AUC_attack = 1 - (Ibase - base(c,0))/scale,  Ibase = integral_0^1 base(c,u) du
+// This folds ~4x faster than integrating the fully composed curve (which would
+// recompute scale and the endpoints at every sample point).
+aucBaseIntegral(c) = sum(k, aucM, cheapCurveBase(c, (k+0.5)/aucM))/aucM;
+aucAttack(c) = 1-(aucBaseIntegral(c)-cheapCurveBase(c, 0))/(cheapCurveBase(c, 1)-cheapCurveBase(c, 0));
+aucMinAttack = aucAttack(shapeMap(1.0));
+// smallest AUC -> normaliser
+aucLevelMultFormula(s) = aucMinAttack/aucAttack(shapeMap(s));
+
+aucTblContent = aucLevelMultFormula(float(ba.time)/float(aucN-1));
+aucReadRaw(idx) = rdtable(aucN, aucTblContent, idx);
+
+aucLevelMult(s) = it.interpolate_linear(frac, lo, hi):max(0):min(1)
+    with {
+        pos = s:max(0):min(1):*(aucN-1);
+        i0 = int(pos);
+        i1 = min(i0+1, aucN-1);
+        frac = pos-i0;
+        lo = aucReadRaw(i0);
+        hi = aucReadRaw(i1);
+    };
 
 //============================================================================
 // DJ-style "clip the peaks" gain stage  (mono, feedback topology)
