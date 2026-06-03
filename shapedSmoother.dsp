@@ -114,9 +114,9 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                     (lookaheadX-prev):min(prevTotalStep),
                     (lookaheadX-prev):max(prevTotalStep))*active;
 
-                prevSpeed = prevTotalStep*select2(releasing,
-                    derivativeBaseAttack(shape, prevPhase),
-                    derivativeBaseRelease(shape, prevPhase));
+                prevSpeed = prevTotalStep*derivativeBaseRelease(shape,
+                    select2(releasing, 1-prevPhase, prevPhase));
+
                 speedRatio = prevSpeed/totalStep;
                 clampedRatio = max(0,
                     min(speedRatio,
@@ -124,9 +124,17 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
 
                 newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(step)*active;
 
-                gonnaDo(phase) = (1-select2(releasing,
+                Readable_gonnaDo(phase) = (1-select2(releasing,
                     cheapCurveAttackS(shape, invCurveScale, zeroVal, phase),
                     cheapCurveReleaseS(shape, invCurveScale, zeroVal, phase)))*totalStep;
+                // select2 evaluates BOTH arms; here they call cheapCurveBase at different
+                // args (1-phase vs phase) so CSE can't merge them -> 2 transcendental
+                // clusters/sample. Attack curve == 1 - release curve(1-x), so pick the
+                // argument first and evaluate cheapCurveBase ONCE.
+                gonnaDo(phase) = select2(releasing, cb, 1-cb)*totalStep
+                    with {
+                        cb = (cheapCurveBase(shape, select2(releasing, 1-phase, phase))-zeroVal)*invCurveScale;
+                    };
 
                 projected = gonnaDo(select2(releasing,
                     inverseDerivativeBottomAttack(shape, clampedRatio),
@@ -159,9 +167,9 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                         inverseDerivativeTopRelease(shape, clampedRatio),
                         inverseDerivativeBottomRelease(shape, clampedRatio)));
 
-                speed = totalStep*select2(releasing,
-                    derivativeAttackS(shape, invCurveScale, newPhase),
-                    derivativeReleaseS(shape, invCurveScale, newPhase));
+                speed = totalStep*derivativeReleaseS(shape,
+                    invCurveScale,
+                    select2(releasing, 1-newPhase, newPhase));
 
                 braking = (prev>lookahead_brake)&(prev<=lookaheadX);
                 brakeRamp = ((_+(1/brake_samples))*braking)~_:min(1);
