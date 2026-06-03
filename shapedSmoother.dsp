@@ -1,10 +1,22 @@
 declare name "shapedSmoother";
-declare version "0.3.2";
+declare version "0.3.3";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
 import("stdfaust.lib");
 
+// v0.3.3: fix the release phase failing to reach 1 for some rel/release-shape
+// combinations. The release branch chose its accelerate/decelerate phase via
+// `gonnaMakeIt = projected > lookaheadX`, but for a single step `projected`
+// equals the target by construction, so the test was decided by rounding. A
+// spurious False past the derivative peak teleported the phase to the bottom
+// branch (~0), permanently losing phase and making the output reach the target
+// early (release faster than dialed). Replaced the release selector with a
+// direct test — accelerate when before the derivative peak or when the target
+// just grew (catch-up) — which matches gonnaMakeIt's intended value without the
+// tie. Attack is unchanged (its analogous flip pins the phase near 1, benign)
+// and the phase resync is unchanged.
+//
 // v0.3.2: v0.3.1 with the dead `remainingCurve` / `new_totalStep` code
 // removed. In v0.3 Faust DCE'd it; in v0.3.1 (calling the new `*S` helpers)
 // it was no longer DCE'd, adding ~5 transcendentals per sample to the inner
@@ -68,6 +80,10 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
         attackMaxDerivBase = maxDerivativeBaseAttack(attackShape);
         releaseMaxDerivBase = maxDerivativeBaseAttack(releaseShape);
 
+        // v0.3.3: phase of the release derivative's peak (slider-rate). Used to
+        // pick the accelerating (bottom) vs decelerating (top) branch robustly.
+        releasePeakPhase = peakPhaseRelease(releaseShape);
+
         env(prev, prevPhase, prevTotalStep, lookaheadX) = result, newPhase, totalStep
             with {
                 // Audio-rate scalars: select the precomputed value, no math.
@@ -111,13 +127,31 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                     inverseDerivativeTopRelease(shape, clampedRatio)))+prev;
                 gonnaMakeIt = (projected>lookaheadX);
 
+                // v0.3.3: robust branch selection for the RELEASE.
+                // For a single step, `projected` equals the target by
+                // construction, so `gonnaMakeIt` is a floating-point coin-flip;
+                // when it lands False past the derivative peak it sends the
+                // phase to the BOTTOM branch (~0 for the release), losing phase
+                // permanently and making the output race to target early.
+                // The bottom branch is genuinely needed only (a) before the
+                // derivative peak (the accelerating part, incl. release onset),
+                // or (b) when the target has just grown and we must re-accelerate
+                // to catch it. Detect both directly instead of via `gonnaMakeIt`:
+                //   prevPhase < releasePeakPhase  -> still accelerating
+                //   totalStep  > prevTotalStep    -> a larger target appeared
+                // This reproduces gonnaMakeIt's *intended* value for a single
+                // step without the tie, and preserves the mid-fade catch-up.
+                // The phase resync (`phaseAtMatchingSpeed + step`) is unchanged.
+                // ATTACK is left byte-identical: there the spurious flip pins
+                // the phase near 1, where it is already heading, so it is benign.
+                releaseUseBottom = (prevPhase<releasePeakPhase)|(totalStep>prevTotalStep);
                 phaseAtMatchingSpeed = select2(releasing,
                     select2(gonnaMakeIt,
                         inverseDerivativeBottomAttack(shape, clampedRatio),
                         inverseDerivativeTopAttack(shape, clampedRatio)),
-                    select2(gonnaMakeIt,
-                        inverseDerivativeBottomRelease(shape, clampedRatio),
-                        inverseDerivativeTopRelease(shape, clampedRatio)));
+                    select2(releaseUseBottom,
+                        inverseDerivativeTopRelease(shape, clampedRatio),
+                        inverseDerivativeBottomRelease(shape, clampedRatio)));
 
                 speed = totalStep*select2(releasing,
                     derivativeAttackS(shape, invCurveScale, newPhase),
@@ -159,6 +193,7 @@ rel_hold_samples = rel_hold*ma.SR;
 //   = max(att, rel) if both att AND rel are shorter than 50 ms.
 // (min(50ms, max(att,rel)) gives exactly this.)
 brake_samples = min(maxBrakeSamples, max(att_samples, rel_samples)):max(1);
+test3 = os.lf_squarewave(hslider("freq", 1, 0.001, 4, 0.001));
 
 // Test signal
 test2 = it.interpolate_linear(hslider("noise level", 0, 0, 1, 0.001),
@@ -208,6 +243,10 @@ derivativeReleaseS(c, invScale, x) = derivativeBaseRelease(c, x)*invScale;
 derivativeAttackS(c, invScale, x) = derivativeBaseAttack(c, x)*invScale;
 
 peakPhaseAttack(c) = 1-sqrt(1-c)*(1-sqrt(1-c))/max(1e-10, c);
+// Phase of the release derivative's peak. The release base derivative is the
+// horizontal flip of the attack one (derivativeBaseAttack(c,x) ==
+// derivativeBaseRelease(c,1-x)), so its peak is the mirror of the attack peak.
+peakPhaseRelease(c) = 1-peakPhaseAttack(c);
 
 // Unscaled peak value — avoids dividing by curveScale then multiplying back
 maxDerivativeBaseAttack(c) = derivativeBaseAttack(c, peakPhaseAttack(c));
