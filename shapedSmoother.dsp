@@ -142,9 +142,24 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
 
                 todo = lookaheadX-prev;
 
+                // curve fraction covered at prevPhase (same form as gonnaDo's cb)
+                cbPrev = (cheapCurveBaseH(shape, curveSqrtInner, curveInvSqrtInner, curveHalfInvC, select2(releasing, 1-prevPhase, prevPhase))-zeroVal)*invCurveScale;
+                fracDone = select2(releasing, 1-cbPrev, cbPrev);
+
+                // Span = (target - releaseStart): the old line used (target - prev),
+                // which understates the span once prev has advanced under a moving
+                // target, so the curve aims short, finishes early, and the phase stalls
+                // at its top clamp (the GR-goes-stationary bug). prev sits at fraction
+                // fracDone of the previous span, so releaseStart = prev -
+                // prevTotalStep*fracDone. The min/max keeps the span constant between
+                // target changes (prevTotalStep/totalStep stays 1, the resync round-
+                // trips, phase advances by +step => shaped curve preserved exactly) and
+                // only steps it when the target genuinely extends the transition, which
+                // the existing catch-up branch re-anchors. Bit-identical to the old
+                // line for a static target.
                 totalStep = select2(releasing,
-                    (lookaheadX-prev):min(prevTotalStep),
-                    (lookaheadX-prev):max(prevTotalStep))*active;
+                    ((lookaheadX-prev)+prevTotalStep*fracDone):min(prevTotalStep),
+                    ((lookaheadX-prev)+prevTotalStep*fracDone):max(prevTotalStep))*active;
 
                 prevSpeed = prevTotalStep*derivativeBaseRelease(shape,
                     select2(releasing, 1-prevPhase, prevPhase));
