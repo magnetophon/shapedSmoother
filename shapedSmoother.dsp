@@ -146,21 +146,6 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                 cbPrev = (cheapCurveBaseH(shape, curveSqrtInner, curveInvSqrtInner, curveHalfInvC, select2(releasing, 1-prevPhase, prevPhase))-zeroVal)*invCurveScale;
                 fracDone = select2(releasing, 1-cbPrev, cbPrev);
 
-                // Span = (target - releaseStart): the old line used (target - prev),
-                // which understates the span once prev has advanced under a moving
-                // target, so the curve aims short, finishes early, and the phase stalls
-                // at its top clamp (the GR-goes-stationary bug). prev sits at fraction
-                // fracDone of the previous span, so releaseStart = prev -
-                // prevTotalStep*fracDone. The min/max keeps the span constant between
-                // target changes (prevTotalStep/totalStep stays 1, the resync round-
-                // trips, phase advances by +step => shaped curve preserved exactly) and
-                // only steps it when the target genuinely extends the transition, which
-                // the existing catch-up branch re-anchors. Bit-identical to the old
-                // line for a static target.
-                // totalStep = select2(releasing,
-                // ((lookaheadX-prev)+prevTotalStep*fracDone):min(prevTotalStep),
-                // ((lookaheadX-prev)+prevTotalStep*fracDone):max(prevTotalStep))*active;
-
                 // True the sample the aim point moves. lookaheadX is the value the env
                 // chases, and slidingMin holds it bit-exactly constant while the window
                 // minimum is unchanged, so `!= mem` fires precisely on a genuine target
@@ -170,17 +155,25 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
 
                 // Span = (target - releaseStart). prev sits at fraction fracDone of the
                 // running span, so releaseStart = prev - prevTotalStep*fracDone and the
-                // live span is (target - prev) + prevTotalStep*fracDone. Adopt that only
-                // when the target actually moves; while it holds, pin totalStep to
-                // prevTotalStep so the resync round-trips bit-exactly (prevTotalStep/
-                // totalStep == 1, phase advances by +step, shaped curve preserved). This
-                // replaces the old min/max clamp, which pinned the static case the same
-                // way but could ONLY let the span grow, so once the target moved closer
-                // (release target dropping, attack target rising) the env kept aiming at
-                // the old, farther target and the transition couldn't shorten. Keying off
-                // the target change lets the span move either way.
+                // live span is (target - prev) + prevTotalStep*fracDone = rawSpan.
                 rawSpan = (lookaheadX-prev)+prevTotalStep*fracDone;
-                totalStep = select2(targetChanged, prevTotalStep, rawSpan)*active;
+                // Attack keeps the old min-clamp; release uses the new target-change gate.
+                //   attack : min(rawSpan, prevTotalStep) pins the span to prevTotalStep
+                //     while rawSpan >= prevTotalStep (prevTotalStep/totalStep == 1, the
+                //     resync round-trips, phase advances by +step => shaped curve
+                //     preserved); bit-identical to the old line for a static target.
+                //   release: pin to prevTotalStep while the target holds (same bit-exact
+                //     resync), and adopt rawSpan only when the target actually moves. The
+                //     old release branch used max(rawSpan, prevTotalStep), which pinned
+                //     the static case the same way but could ONLY let the span grow, so
+                //     once the release target moved closer the env kept aiming at the old,
+                //     farther target and the transition couldn't shorten (the GR-goes-
+                //     stationary bug). Keying off targetChanged lets the release span move
+                //     either way.
+
+                totalStep = select2(releasing,
+                    ((lookaheadX-prev)+prevTotalStep*fracDone):min(prevTotalStep),
+                    select2(targetChanged, prevTotalStep, rawSpan))*active;
 
                 prevSpeed = prevTotalStep*derivativeBaseRelease(shape,
                     select2(releasing, 1-prevPhase, prevPhase));
