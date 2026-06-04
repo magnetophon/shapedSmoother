@@ -125,7 +125,7 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                 // whole reciprocal (atan + divide) lifts to slider-rate. Drops 2 atan
                 // and 2 divides/sample. The sibling picks below don't carry a trapped
                 // transcendental, so they stay as readable select2.
-                invCurveScale = attackInvCurveScale + releasing*(releaseInvCurveScale - attackInvCurveScale);
+                invCurveScale = attackInvCurveScale+releasing*(releaseInvCurveScale-attackInvCurveScale);
                 zeroVal = select2(releasing, attackZero, releaseZero);
                 maxDerivVal = select2(releasing, attackMaxDerivBase, releaseMaxDerivBase);
                 curveSqrtInner = select2(releasing, attackCurveSqrtInner, releaseCurveSqrtInner);
@@ -157,9 +157,30 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                 // only steps it when the target genuinely extends the transition, which
                 // the existing catch-up branch re-anchors. Bit-identical to the old
                 // line for a static target.
-                totalStep = select2(releasing,
-                    ((lookaheadX-prev)+prevTotalStep*fracDone):min(prevTotalStep),
-                    ((lookaheadX-prev)+prevTotalStep*fracDone):max(prevTotalStep))*active;
+                // totalStep = select2(releasing,
+                // ((lookaheadX-prev)+prevTotalStep*fracDone):min(prevTotalStep),
+                // ((lookaheadX-prev)+prevTotalStep*fracDone):max(prevTotalStep))*active;
+
+                // True the sample the aim point moves. lookaheadX is the value the env
+                // chases, and slidingMin holds it bit-exactly constant while the window
+                // minimum is unchanged, so `!= mem` fires precisely on a genuine target
+                // change and is silent during a hold. (mem of an input is a 1-sample
+                // delay; it does not enter the env feedback.)
+                targetChanged = lookaheadX!=lookaheadX';
+
+                // Span = (target - releaseStart). prev sits at fraction fracDone of the
+                // running span, so releaseStart = prev - prevTotalStep*fracDone and the
+                // live span is (target - prev) + prevTotalStep*fracDone. Adopt that only
+                // when the target actually moves; while it holds, pin totalStep to
+                // prevTotalStep so the resync round-trips bit-exactly (prevTotalStep/
+                // totalStep == 1, phase advances by +step, shaped curve preserved). This
+                // replaces the old min/max clamp, which pinned the static case the same
+                // way but could ONLY let the span grow, so once the target moved closer
+                // (release target dropping, attack target rising) the env kept aiming at
+                // the old, farther target and the transition couldn't shorten. Keying off
+                // the target change lets the span move either way.
+                rawSpan = (lookaheadX-prev)+prevTotalStep*fracDone;
+                totalStep = select2(targetChanged, prevTotalStep, rawSpan)*active;
 
                 prevSpeed = prevTotalStep*derivativeBaseRelease(shape,
                     select2(releasing, 1-prevPhase, prevPhase));
@@ -214,7 +235,7 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
 
                 braking = (prev>lookahead_brake)&(prev<=lookaheadX);
                 brakeRamp = ((_+(1/brake_samples))*braking)~_:min(1);
-                brakeMult = 1-brakeRamp;
+                brakeMult = 1-brakeRamp*checkbox("enable brake");
                 delta = speed*step*brakeMult;
 
                 result = min(prev+delta, x@(att_samples+brake_samples+rel_hold_samples));
@@ -322,8 +343,7 @@ cheapCurveAttack(c, x) = cheapCurveRelease(c, x*-1+1)*-1+1;
 // become multiply-by-reciprocal, i.e. equal to cheapCurveBase to <=1 ULP (~1e-16,
 // inaudible). For strict bit-exactness write atan(x/sqrtInner) and /(2*c) here
 // instead (keeps the sqrt + 1/c win, leaves those two as divides).
-cheapCurveBaseH(c, sqrtInner, invSqrtInner, halfInvC, x) =
-    (log(c*(x*x-1)+1)+2*sqrtInner*atan(x*invSqrtInner)-2*x)*halfInvC;
+cheapCurveBaseH(c, sqrtInner, invSqrtInner, halfInvC, x) = (log(c*(x*x-1)+1)+2*sqrtInner*atan(x*invSqrtInner)-2*x)*halfInvC;
 
 cheapCurveReleaseS(c, invScale, zero, x) = (cheapCurveBase(c, x)-zero)*invScale;
 cheapCurveAttackS(c, invScale, zero, x) = cheapCurveReleaseS(c, invScale, zero, x*-1+1)*-1+1;
