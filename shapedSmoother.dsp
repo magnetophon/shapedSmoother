@@ -231,7 +231,26 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                 brakeMult = 1-brakeRamp*checkbox("enable brake");
                 delta = speed*step*brakeMult;
 
-                result = min(prev+delta, x@(att_samples+brake_samples+rel_hold_samples));
+                // ===== release-kink smoothing (velocity-matched, hands back to the curve) =
+                // When the release target shrinks faster than the shaped curve can
+                // decelerate, the inverse-derivative resync saturates: clampedRatio pins to
+                // the curve's peak and the env's velocity drops in a single sample (the
+                // kink). Only in that infeasible case, ease the velocity from its previous
+                // value toward the curve's velocity with a one-pole, instead of snapping.
+                // The eased value is floored at the curve's own delta (so it can NEVER stall
+                // below the curve -> the release always completes) and capped at the gap (so
+                // it can NEVER overshoot the target). When feasible -> exactly `delta`, i.e.
+                // bit-identical to the shaped curve, so normal releases are untouched.
+                gap = lookaheadX-prev;
+                prevDelta = prev-prev';   // actual last velocity (result[n-1]-result[n-2]);
+                                          // prev' is a delay of the fed-back input, not a loop
+                vMaxCurve = totalStep*maxDerivVal*invCurveScale*step;   // curve's peak step now
+                bridgeInfeasible = releasing&(prevDelta>vMaxCurve)&(gap>bridgeEpsilon);
+                bridgedDelta = min(gap, prevDelta+(delta-prevDelta)*bridgeDecay);
+                // ==========================================================================
+
+                result = min(prev+select2(bridgeInfeasible, delta, bridgedDelta),
+                    x@(att_samples+brake_samples+rel_hold_samples));
             };
     };
 
@@ -245,6 +264,13 @@ maxHoldSamples = maxHold*maxSR;
 maxBrakeSamples = maxBrake*maxSR;
 maxRelHoldSamples = maxRelHold*maxSR;
 maxTotalSamples = (maxHold+maxBrake)*maxSR;
+
+// Release-kink smoothing (see env). When a shrinking release target outruns the
+// shaped curve, the velocity is eased onto the curve with this one-pole instead
+// of snapping. bridgeEpsilon is in input-signal amplitude units.
+bridgeEpsilon = 1e-6;   // |gap| at/below which the release is treated as done
+bridgeTau = 0.003;      // s, time constant for bleeding excess release velocity onto the curve
+bridgeDecay = 1-exp(-1.0/(bridgeTau*ma.SR));
 
 // AUC level compensation.
 // Goal: changing the shape must NOT change the average level. A single-step
