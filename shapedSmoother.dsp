@@ -85,26 +85,26 @@ import("auc_poly.lib");
 //  the AUC level compensation (aucLevelMultFormula, baked into aucLevelMult in
 //  auc_poly.lib) and env()'s shapeMap() can reference them unchanged.
 // ============================================================================
-MainGroup(x)     = hgroup("[0]shapedSmoother", x);
-TestGroup(x)     = vgroup("[0]Test signal", x);
+MainGroup(x) = hgroup("[0]shapedSmoother", x);
+TestGroup(x) = vgroup("[0]Test signal", x);
 SmootherGroup(x) = vgroup("[1]Smoother", x);
 
 // --- Test signal ---
 testNoiseLevel = TestGroup(hslider("[0]noise level", 0, 0, 1, 0.001));
-testNoiseRate  = TestGroup(hslider("[1]noise rate", 42, 1, 1000, 1));
+testNoiseRate = TestGroup(hslider("[1]noise rate", 42, 1, 1000, 1));
 testBlockscale = TestGroup(hslider("[2]blockscale", 1, 0.01, 10, 0.01));
-testFreq       = TestGroup(hslider("[3]freq", 1, 0.001, 4, 0.001));
-testStep1      = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
-testStep2      = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
+testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 4, 0.001));
+testStep1 = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
+testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
 
 // --- Smoother (raw; scaled att/rel/rel_hold are derived in Parameters) ---
-attMs              = SmootherGroup(hslider("[0]att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01));
-attackShapeSlider  = SmootherGroup(hslider("[1]attack shape", 0, 0, 1, 0.001));
-attAucComp         = SmootherGroup(checkbox("[2]att auc comp"));
-relMs              = SmootherGroup(hslider("[3]rel[scale:log]", 0.05*1000, 1, 5000, 0.1));
+attMs = SmootherGroup(hslider("[0]att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01));
+attackShapeSlider = SmootherGroup(hslider("[1]attack shape", 0, 0, 1, 0.001));
+attAucComp = SmootherGroup(checkbox("[2]att auc comp"));
+relMs = SmootherGroup(hslider("[3]rel[scale:log]", 0.05*1000, 1, 5000, 0.1));
 releaseShapeSlider = SmootherGroup(hslider("[4]release shape", 0, 0, 1, 0.001));
-relAucComp         = SmootherGroup(checkbox("[5]rel auc comp"));
-relHoldMs          = SmootherGroup(hslider("[6]rel hold[unit:ms]", 50, 0, maxRelHold*1000, 1));
+relAucComp = SmootherGroup(checkbox("[5]rel auc comp"));
+relHoldMs = SmootherGroup(hslider("[6]rel hold[unit:ms]", 50, 0, maxRelHold*1000, 1));
 
 process = MainGroup((test2@(att_samples+brake_samples+rel_hold_samples), shapedSmoother(test2)));
 shapedSmoother(x) = lookaheadX:env~(_, _, _)
