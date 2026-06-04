@@ -394,7 +394,7 @@ shapeMap(c) = 1-0.9999*exp(-8.2*pow(c, 1.3));
 // ============================================================================
 aucN = 257;
 // table points across the shape slider range [0,1]
-aucM = 32;
+aucM = 128;
 // midpoint integration steps (init-time only; M=32 -> AUC err ~2e-7)
 
 // AUC_attack reduced algebraically to a SINGLE integral of cheapCurveBase:

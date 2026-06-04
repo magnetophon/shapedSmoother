@@ -1,17 +1,38 @@
 // auc_poly.lib — baked AUC level-compensation multiplier. GENERATED, do not edit.
-// degree-8 fit of aucLevelMultFormula (in u=2s-1), max abs err 1.81e-04 (~0.0016 dB).
+// degree-12 fit of aucLevelMultFormula (in u=2s-1), max abs err 5.80e-05 (~0.0005 dB) vs the curve integrated at M=256.
+// breakdown: fit residual vs the plugin's own aucM samples 5.79e-05; integration bias of those samples 5.66e-08.
 // source of truth: shapedSmoother.dsp (aucLevelMultFormula) via library().
-// regenerate: regen_auc_poly.sh shapedSmoother.dsp 8 257
+// regenerate: regen_auc_poly.sh shapedSmoother.dsp 12 257
+//
+// == generation provenance (commented; the live code lives in the plugin) ====
+// constants: degree=12, N=257 (uniform grid on s in [0,1]), REF_M=256.
+// method: sample aucLevelMultFormula at the N grid points, then least-squares fit
+//   a degree-12 polynomial in u=2s-1. The integral inside is the midpoint rule.
+// fit-target definitions, copied verbatim from shapedSmoother.dsp:
+//   shapeMap(c) = 1-0.9999*exp(-8.2*pow(c, 1.3));
+//   cheapCurveBase(c, x) = (log(c*(x*x-1)+1)+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2*x)/(2*c);
+//   aucM = 128;
+//   aucBaseIntegral(c) = sum(k, aucM, cheapCurveBase(c, (k+0.5)/aucM))/aucM;
+//   aucAttack(c) = 1-(aucBaseIntegral(c)-cheapCurveBase(c, 0))/(cheapCurveBase(c, 1)-cheapCurveBase(c, 0));
+//   aucMinAttack = aucAttack(shapeMap(1.0));
+//   aucLevelMultFormula(s) = aucMinAttack/aucAttack(shapeMap(s));
+// error reference: the same curve re-integrated at M=256 midpoint steps, used
+//   only to measure the error reported above (it does not affect the fit).
+// ============================================================================
 aucLevelMult(s) = poly(s:max(0):min(1)):max(0):min(1)
 with {
-    poly(x) = a0 + u*(a1 + u*(a2 + u*(a3 + u*(a4 + u*(a5 + u*(a6 + u*(a7 + u*(a8)))))))) with { u = 2*x - 1; };
-    a0 = 0.4780537120431045;
-    a1 = 0.32982047578306034;
-    a2 = 0.1863362896044105;
-    a3 = 0.02251052039728578;
-    a4 = -0.014397949341965083;
-    a5 = -0.002939594279517644;
-    a6 = -0.0032959608010255303;
-    a7 = -0.0011851953266809319;
-    a8 = 0.005132854268603932;
+    poly(x) = a0 + u*(a1 + u*(a2 + u*(a3 + u*(a4 + u*(a5 + u*(a6 + u*(a7 + u*(a8 + u*(a9 + u*(a10 + u*(a11 + u*(a12)))))))))))) with { u = 2*x - 1; };
+    a0 = 0.47860703137440425;
+    a1 = 0.330162303344568;
+    a2 = 0.18670048686793164;
+    a3 = 0.022532192851652134;
+    a4 = -0.01419313017372621;
+    a5 = 0.0009785515408471154;
+    a6 = -0.011590474523844103;
+    a7 = -0.017439518013983264;
+    a8 = 0.034189013185810774;
+    a9 = 0.022265979347779016;
+    a10 = -0.037070576692739374;
+    a11 = -0.010546069101003055;
+    a12 = 0.015411832880627956;
 };
