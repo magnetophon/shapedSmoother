@@ -12,63 +12,9 @@ import("stdfaust.lib");
 //   regen_auc_poly.sh shapedSmoother.dsp 8 257
 import("auc_poly.lib");
 
-// Superseded in v0.3.5: the AUC multiplier used to be a 257-entry baked
-// waveform read with linear interpolation. Kept here only as a pointer.
-// baked aucTbl; regenerate with auc.sh
+// Commented out: only the reference LUT path (table_aucLevelMult, far below)
+// needs aucTbl from this file. The live AUC multiplier uses auc_poly.lib above.
 // import("auc_waveform.lib");
-
-// v0.3.5: replace the baked aucLevelMult LUT with a degree-8 polynomial fit,
-// now in auc_poly.lib. The LUT was a 257-entry waveform (auc_waveform.lib);
-// because aucLevelMult is folded into att/rel — which feed the lookahead, the
-// brake, the output delays AND the env() recursion — Faust's box evaluator
-// re-expanded the whole 257-entry waveform at every one of those use sites
-// (cost = table_size * fan-out), pushing `faust -time` evaluation from ~0.3s to
-// ~14s. A polynomial is ~16 cheap ops, so the same fan-out is free and
-// evaluation drops back to ~0.4s. Runtime cost is unchanged (the multiplier is
-// slider-rate, computed once per block). The poly is least-squares-fit to
-// aucLevelMultFormula (still defined below, the single source of truth) and
-// matches it to ~1.8e-4 (~0.0016 dB) -> inaudible. Regenerate with:
-//   regen_auc_poly.sh shapedSmoother.dsp 8 257
-// The old table path is kept below as `table_aucLevelMult` for reference.
-//
-// v0.3.4 The LUT scales att/rel by aucLevelMult(shape) so changing the shape no longer
-// changes the average level. See the "AUC level compensation" comment on the
-// att/rel sliders and the "AUC level-compensation LUT" block lower down.
-// Folding the factor into att/rel makes the reported latency shape-dependent
-// (largest at the sharpest shape).
-//
-// v0.3.3: fix the release phase failing to reach 1 for some rel/release-shape
-// combinations. The release branch chose its accelerate/decelerate phase via
-// `gonnaMakeIt = projected > lookaheadX`, but for a single step `projected`
-// equals the target by construction, so the test was decided by rounding. A
-// spurious False past the derivative peak teleported the phase to the bottom
-// branch (~0), permanently losing phase and making the output reach the target
-// early (release faster than dialed). Replaced the release selector with a
-// direct test — accelerate when before the derivative peak or when the target
-// just grew (catch-up) — which matches gonnaMakeIt's intended value without the
-// tie. Attack is unchanged (its analogous flip pins the phase near 1, benign)
-// and the phase resync is unchanged.
-//
-// v0.3.2: v0.3.1 with the dead `remainingCurve` / `new_totalStep` code
-// removed. In v0.3 Faust DCE'd it; in v0.3.1 (calling the new `*S` helpers)
-// it was no longer DCE'd, adding ~5 transcendentals per sample to the inner
-// loop. Removing the source-level dead code eliminates the regression.
-//
-// v0.3.1: v0.3 verbatim + slider-rate hoisting of per-shape constants.
-// NO algebraic restructuring vs v0.3 — attack/release stay as separate
-// function calls, derivativeBaseAttack/Release stay as separate functions,
-// inverseDerivative*Attack/Release stay as 4 separate things. The only
-// change is that quantities that depend solely on the shape sliders
-// (which Faust failed to auto-lift through `select2(releasing, ...)`) are
-// computed per-shape and selected scalar-only inside env().
-//
-// Specifically hoisted:
-//   attackShape, releaseShape          (shapeMap of the slider)
-//   attackInvCurveScale, releaseInvCurveScale  (1/curveScale)
-//   attackZero, releaseZero            (cheapCurveBase(c, 0))
-//   attackMaxDerivBase, releaseMaxDerivBase    (maxDerivativeBaseAttack)
-//
-// Everything else is byte-identical to v0.3.
 
 // ============================================================================
 //  GUI — every user-facing control in one place.
@@ -132,10 +78,10 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
         // release-held signal as lookaheadX.
         lookahead_brake = held:ba.slidingMin(att_samples+brake_samples+1, 1+(maxHold+maxBrake)*maxSR);
         // ---- Hoisted per-shape constants (slider-rate) ----
-        // These are pure functions of the shape sliders. Faust's auto-lift
-        // doesn't push through `select2(releasing, sliderA, sliderB)` so in
-        // v0.3 every `cheapCurveBase`/`curveScale`/`maxDerivativeBaseAttack`
-        // call on `shape` fires audio-rate. Precompute them per-shape.
+        // Pure functions of the shape sliders. Faust's auto-lift doesn't push
+        // these through `select2(releasing, sliderA, sliderB)`, so without
+        // hoisting every `cheapCurveBase`/`curveScale`/`maxDerivativeBaseAttack`
+        // call on `shape` would fire at audio rate. Precompute them per-shape.
         attackShape = shapeMap(attackShapeSlider);
         releaseShape = shapeMap(releaseShapeSlider);
 
@@ -148,8 +94,8 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
         attackMaxDerivBase = maxDerivativeBaseAttack(attackShape);
         releaseMaxDerivBase = maxDerivativeBaseAttack(releaseShape);
 
-        // v0.3.3: phase of the release derivative's peak (slider-rate). Used to
-        // pick the accelerating (bottom) vs decelerating (top) branch robustly.
+        // Phase of the release derivative's peak (slider-rate). Used to pick the
+        // accelerating (bottom) vs decelerating (top) branch robustly.
         releasePeakPhase = peakPhaseRelease(releaseShape);
 
         env(prev, prevPhase, prevTotalStep, lookaheadX) = result, newPhase, totalStep
@@ -203,23 +149,17 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                     inverseDerivativeTopRelease(shape, clampedRatio)))+prev;
                 gonnaMakeIt = (projected>lookaheadX);
 
-                // v0.3.3: robust branch selection for the RELEASE.
-                // For a single step, `projected` equals the target by
-                // construction, so `gonnaMakeIt` is a floating-point coin-flip;
-                // when it lands False past the derivative peak it sends the
-                // phase to the BOTTOM branch (~0 for the release), losing phase
-                // permanently and making the output race to target early.
-                // The bottom branch is genuinely needed only (a) before the
-                // derivative peak (the accelerating part, incl. release onset),
-                // or (b) when the target has just grown and we must re-accelerate
-                // to catch it. Detect both directly instead of via `gonnaMakeIt`:
-                //   prevPhase < releasePeakPhase  -> still accelerating
-                //   totalStep  > prevTotalStep    -> a larger target appeared
-                // This reproduces gonnaMakeIt's *intended* value for a single
-                // step without the tie, and preserves the mid-fade catch-up.
-                // The phase resync (`phaseAtMatchingSpeed + step`) is unchanged.
-                // ATTACK is left byte-identical: there the spurious flip pins
-                // the phase near 1, where it is already heading, so it is benign.
+                // Branch selection for `phaseAtMatchingSpeed`. ATTACK uses
+                // `gonnaMakeIt` directly. RELEASE instead picks the accelerating
+                // (bottom) inverse when either:
+                //   prevPhase < releasePeakPhase  -> still before the derivative peak
+                //   totalStep  > prevTotalStep    -> a larger target appeared (catch-up)
+                // and the decelerating (top) inverse otherwise. Direct tests are
+                // used here because for a single release step `projected` equals
+                // the target, so `gonnaMakeIt` would be decided by rounding;
+                // testing the conditions directly gives its intended value
+                // without the tie. The phase resync (`phaseAtMatchingSpeed +
+                // step`) is identical for both branches.
                 releaseUseBottom = (prevPhase<releasePeakPhase)|(totalStep>prevTotalStep);
                 phaseAtMatchingSpeed = select2(releasing,
                     select2(gonnaMakeIt,
@@ -323,15 +263,16 @@ testSig = os.lf_sawpos(0.5)<:(((_>0.25)*testStep1)+((_>0.5)*testStep2));
 // https://www.desmos.com/calculator/dynyjjkuli
 // with flip horizontal:
 // https://www.desmos.com/calculator/bsr8cdn21v
-
+// file scope, next to the other curve defs — same math, hoisted sub-terms:
+cheapCurveBaseH(c, sqrtInner, invSqrtInner, halfInvC, x) = (log(c*(x*x-1)+1)+2*sqrtInner*atan(x*invSqrtInner)-2*x)*halfInvC;
 cheapCurveBase(c, x) = (log(c*(pow(x, 2)-1)+1)+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2*x)/(2*c);
 curveScale(c) = cheapCurveBase(c, 1)-cheapCurveBase(c, 0);
 cheapCurveRelease(c, x) = (cheapCurveBase(c, x)-cheapCurveBase(c, 0))/curveScale(c);
 cheapCurveAttack(c, x) = cheapCurveRelease(c, x*-1+1)*-1+1;
 
-// v0.3.1: variants taking precomputed 1/curveScale and cheapCurveBase(c,0).
-// Mathematically identical to cheapCurveRelease/Attack — they just don't
-// recompute curveScale and cheapCurveBase(c,0) per sample.
+// Variants taking precomputed 1/curveScale and cheapCurveBase(c,0), so they
+// don't recompute curveScale and cheapCurveBase(c,0) per sample. Same result
+// as cheapCurveRelease/Attack.
 //   invScale = 1/curveScale(c)
 //   zero     = cheapCurveBase(c, 0)
 cheapCurveReleaseS(c, invScale, zero, x) = (cheapCurveBase(c, x)-zero)*invScale;
@@ -347,7 +288,7 @@ derivativeBaseAttack(c, x) = x*(1-x)/(c*pow(x, 2)+1-(2*c*x));
 derivativeRelease(c, x) = derivativeBaseRelease(c, x)/curveScale(c);
 derivativeAttack(c, x) = derivativeBaseAttack(c, x)/curveScale(c);
 
-// v0.3.1: variants taking precomputed 1/curveScale. Same math.
+// Variants taking precomputed 1/curveScale. Same result as derivativeRelease/Attack.
 derivativeReleaseS(c, invScale, x) = derivativeBaseRelease(c, x)*invScale;
 derivativeAttackS(c, invScale, x) = derivativeBaseAttack(c, x)*invScale;
 
@@ -393,9 +334,9 @@ shapeMap(c) = 1-0.9999*exp(-8.2*pow(c, 1.3));
 //  read aucLevelMultFormula via library() and re-bake the polynomial.
 //
 //  Everything below aucLevelMultFormula (aucTblContent, aucReadRaw,
-//  table_aucLevelMult) is the v0.3.4-and-earlier LUT path, kept for reference.
-//  It is dead code and needs auc_waveform.lib (commented out at the top)
-//  re-enabled to compile, since aucTbl lives there.
+//  table_aucLevelMult) is the older LUT path, kept for reference. It is dead
+//  code and needs auc_waveform.lib (commented out at the top) re-enabled to
+//  compile, since aucTbl lives there.
 //
 //  NOTE: compile with -double. At very small c (shape slider near 0) the
 //  cheapCurveBase formula suffers catastrophic cancellation in single
@@ -417,13 +358,14 @@ aucMinAttack = aucAttack(shapeMap(1.0));
 // smallest AUC -> normaliser
 aucLevelMultFormula(s) = aucMinAttack/aucAttack(shapeMap(s));
 
-// Superseded compile paths, kept for reference — both were too slow to compile:
-//   1. aucReadRaw via rdtable(aucN, aucTblContent, idx): the integral as LIVE
-//      rdtable content made Faust expand aucN*aucM transcendentals at compile.
+// Two alternative compile paths, kept for reference — both compile too slowly:
+//   1. aucReadRaw via rdtable(aucN, aucTblContent, idx) (commented out just
+//      below): the integral as LIVE rdtable content makes Faust expand
+//      aucN*aucM transcendentals at compile time.
 //   2. the baked waveform (auc_waveform.lib): folding its read into att/rel
-//      re-expanded the 257-entry table at every att/rel use site (size *
-//      fan-out), ~14s evaluation.
-// Both replaced by the auc_poly.lib polynomial in v0.3.5. Regenerate with:
+//      re-expands the 257-entry table at every att/rel use site (size *
+//      fan-out).
+// The live path uses the auc_poly.lib polynomial. Regenerate with:
 //   regen_auc_poly.sh shapedSmoother.dsp 8 257
 aucTblContent = aucLevelMultFormula(float(ba.time)/float(aucN-1)):min(1);
 // aucReadRaw(idx) = rdtable(aucN, aucTblContent, idx);
