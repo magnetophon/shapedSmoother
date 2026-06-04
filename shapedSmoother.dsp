@@ -1,10 +1,36 @@
 declare name "shapedSmoother";
-declare version "0.3.4";
+declare version "0.3.5";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
 import("stdfaust.lib");
 
+// AUC level-compensation multiplier (provides aucLevelMult, the dependency of
+// aucLevelMultSwitched below). It is a degree-8 polynomial baked from
+// aucLevelMultFormula — the source of truth, defined far below. Regenerate
+// after any change to the curve or shapeMap with:
+//   regen_auc_poly.sh shapedSmoother.dsp 8 257
+import("auc_poly.lib");
+
+// Superseded in v0.3.5: the AUC multiplier used to be a 257-entry baked
+// waveform read with linear interpolation. Kept here only as a pointer.
+// baked aucTbl; regenerate with auc.sh
+// import("auc_waveform.lib");
+
+// v0.3.5: replace the baked aucLevelMult LUT with a degree-8 polynomial fit,
+// now in auc_poly.lib. The LUT was a 257-entry waveform (auc_waveform.lib);
+// because aucLevelMult is folded into att/rel — which feed the lookahead, the
+// brake, the output delays AND the env() recursion — Faust's box evaluator
+// re-expanded the whole 257-entry waveform at every one of those use sites
+// (cost = table_size * fan-out), pushing `faust -time` evaluation from ~0.3s to
+// ~14s. A polynomial is ~16 cheap ops, so the same fan-out is free and
+// evaluation drops back to ~0.4s. Runtime cost is unchanged (the multiplier is
+// slider-rate, computed once per block). The poly is least-squares-fit to
+// aucLevelMultFormula (still defined below, the single source of truth) and
+// matches it to ~1.8e-4 (~0.0016 dB) -> inaudible. Regenerate with:
+//   regen_auc_poly.sh shapedSmoother.dsp 8 257
+// The old table path is kept below as `table_aucLevelMult` for reference.
+//
 // v0.3.4 The LUT scales att/rel by aucLevelMult(shape) so changing the shape no longer
 // changes the average level. See the "AUC level compensation" comment on the
 // att/rel sliders and the "AUC level-compensation LUT" block lower down.
@@ -191,8 +217,9 @@ maxBrakeSamples = maxBrake*maxSR;
 maxRelHoldSamples = maxRelHold*maxSR;
 maxTotalSamples = (maxHold+maxBrake)*maxSR;
 
-// Raw shape sliders. Named here so the AUC level-compensation LUT (defined
-// lower in the file) can index them, and so env() can shapeMap() them.
+// Raw shape sliders. Named here so the AUC level compensation (aucLevelMultFormula
+// below, baked into aucLevelMult in auc_poly.lib) can use them, and so env() can
+// shapeMap() them.
 attackShapeSlider = hslider("attack shape", 0, 0, 1, 0.001);
 releaseShapeSlider = hslider("release shape", 0, 0, 1, 0.001);
 
@@ -202,6 +229,8 @@ releaseShapeSlider = hslider("release shape", 0, 0, 1, 0.001);
 // the duration by  aucLevelMult(shape) = AUC_attack(shapeMap(1)) / AUC_attack(shape),
 // so  T_eff * AUC = const  -> the area is shape-independent. The factor is
 // normalized to <=1 (==1 at the sharpest shape), so durations only ever shorten.
+// (aucLevelMult is the polynomial from auc_poly.lib; the exact factor it
+// approximates is aucLevelMultFormula, defined far below.)
 //
 // We fold the factor straight into att/rel, so the lookahead, brake sizing AND
 // fade speed all use the same compensated duration -> the single-step response
@@ -225,6 +254,7 @@ relAucComp = checkbox("rel auc comp");
 // Blend the multiplier toward 1.0 when the switch is off. Branchless on
 // purpose: `on` is 0 or 1 so it's exact, the multiplier is clamped to [0,1]
 // so `on*(m-1)` can't blow up, and this is slider-rate regardless.
+// aucLevelMult comes from auc_poly.lib (imported at the top).
 aucLevelMultSwitched(on, s) = 1+on*(aucLevelMult(s)-1);
 
 att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01)/1000*aucLevelMultSwitched(attAucComp, attackShapeSlider);
@@ -324,12 +354,19 @@ inverseDerivativeBottomAttack(c, D) = 1-inverseDerivativeBottomRelease(c, D);
 shapeMap(c) = 1-0.9999*exp(-8.2*pow(c, 1.3));
 
 // ============================================================================
-//  AUC level-compensation LUT
+//  AUC level compensation — formula (SOURCE OF TRUTH) + superseded LUT
 // ----------------------------------------------------------------------------
-//  Reuses cheapCurveBase / shapeMap defined above. AUC_attack(c) has no
-//  closed form, so it is a midpoint-rule numerical integral; that sum runs
-//  only while the rdtable is filled at init (aucN*aucM evals once), never per
-//  audio sample. Read with linear interpolation.
+//  aucLevelMultFormula is the exact definition. AUC_attack(c) has no closed
+//  form, so it is a midpoint-rule numerical integral (aucM steps). This is the
+//  single source of truth: auc_poly.lib (imported at the top) is a polynomial
+//  fit of it. Nothing in the audio path calls these definitions, so Faust drops
+//  them from the compiled plugin — they exist only so regen_auc_poly.sh can
+//  read aucLevelMultFormula via library() and re-bake the polynomial.
+//
+//  Everything below aucLevelMultFormula (aucTblContent, aucReadRaw,
+//  table_aucLevelMult) is the v0.3.4-and-earlier LUT path, kept for reference.
+//  It is dead code and needs auc_waveform.lib (commented out at the top)
+//  re-enabled to compile, since aucTbl lives there.
 //
 //  NOTE: compile with -double. At very small c (shape slider near 0) the
 //  cheapCurveBase formula suffers catastrophic cancellation in single
@@ -351,10 +388,18 @@ aucMinAttack = aucAttack(shapeMap(1.0));
 // smallest AUC -> normaliser
 aucLevelMultFormula(s) = aucMinAttack/aucAttack(shapeMap(s));
 
-aucTblContent = aucLevelMultFormula(float(ba.time)/float(aucN-1));
-aucReadRaw(idx) = rdtable(aucN, aucTblContent, idx);
-
-aucLevelMult(s) = it.interpolate_linear(frac, lo, hi):max(0):min(1)
+// Superseded compile paths, kept for reference — both were too slow to compile:
+//   1. aucReadRaw via rdtable(aucN, aucTblContent, idx): the integral as LIVE
+//      rdtable content made Faust expand aucN*aucM transcendentals at compile.
+//   2. the baked waveform (auc_waveform.lib): folding its read into att/rel
+//      re-expanded the 257-entry table at every att/rel use site (size *
+//      fan-out), ~14s evaluation.
+// Both replaced by the auc_poly.lib polynomial in v0.3.5. Regenerate with:
+//   regen_auc_poly.sh shapedSmoother.dsp 8 257
+aucTblContent = aucLevelMultFormula(float(ba.time)/float(aucN-1)):min(1);
+// aucReadRaw(idx) = rdtable(aucN, aucTblContent, idx);
+aucReadRaw(idx) = aucTbl, idx:rdtable;
+table_aucLevelMult(s) = it.interpolate_linear(frac, lo, hi):max(0):min(1)
     with {
         pos = s:max(0):min(1):*(aucN-1);
         i0 = int(pos);

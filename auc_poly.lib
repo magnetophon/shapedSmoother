@@ -1,0 +1,17 @@
+// auc_poly.lib — baked AUC level-compensation multiplier. GENERATED, do not edit.
+// degree-8 fit of aucLevelMultFormula (in u=2s-1), max abs err 1.81e-04 (~0.0016 dB).
+// source of truth: shapedSmoother.dsp (aucLevelMultFormula) via library().
+// regenerate: regen_auc_poly.sh shapedSmoother.dsp 8 257
+aucLevelMult(s) = poly(s:max(0):min(1)):max(0):min(1)
+with {
+    poly(x) = a0 + u*(a1 + u*(a2 + u*(a3 + u*(a4 + u*(a5 + u*(a6 + u*(a7 + u*(a8)))))))) with { u = 2*x - 1; };
+    a0 = 0.4780537120431045;
+    a1 = 0.32982047578306034;
+    a2 = 0.1863362896044105;
+    a3 = 0.02251052039728578;
+    a4 = -0.014397949341965083;
+    a5 = -0.002939594279517644;
+    a6 = -0.0032959608010255303;
+    a7 = -0.0011851953266809319;
+    a8 = 0.005132854268603932;
+};
