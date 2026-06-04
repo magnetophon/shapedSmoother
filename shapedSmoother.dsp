@@ -1,5 +1,5 @@
 declare name "shapedSmoother";
-declare version "0.3.5";
+declare version "0.3.6";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2025 - 2026, Bart Brouns";
@@ -98,21 +98,45 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
         // accelerating (bottom) vs decelerating (top) branch robustly.
         releasePeakPhase = peakPhaseRelease(releaseShape);
 
+        // v0.3.6: hoisted internals of cheapCurveBase for the cheapCurveBaseH
+        // call in env() (slider-rate: pure functions of the shape sliders).
+        attackCurveSqrtInner = sqrt((1/attackShape)-1);
+        releaseCurveSqrtInner = sqrt((1/releaseShape)-1);
+        attackCurveInvSqrtInner = 1/attackCurveSqrtInner;
+        releaseCurveInvSqrtInner = 1/releaseCurveSqrtInner;
+        attackCurveHalfInvC = 1/(2*attackShape);
+        releaseCurveHalfInvC = 1/(2*releaseShape);
+
+        // v0.3.6: per-sample 1/totalNRSteps hoisted to slider-rate. Bit-identical
+        // (same operands and max(1) clamp, just computed once per block).
+        attStep = 1/((att*ma.SR):max(1));
+        relStep = 1/((rel*ma.SR):max(1));
+
         env(prev, prevPhase, prevTotalStep, lookaheadX) = result, newPhase, totalStep
             with {
                 // Audio-rate scalars: select the precomputed value, no math.
                 shape = select2(releasing, attackShape, releaseShape);
-                invCurveScale = select2(releasing, attackInvCurveScale, releaseInvCurveScale);
+                // NB: arithmetic blend, NOT select2. `releasing` is 0/1, so this is
+                // bit-identical to select2(releasing, attack, release) — but select2
+                // traps its branches: Faust will not hoist a control-rate sub-term
+                // across the select boundary, so `1/curveScale(shape)` kept firing an
+                // atan() PER SAMPLE (the atan's arg was hoisted, the atan call wasn't).
+                // As a `+ sel*(b-a)` blend both arms are ordinary operands, so the
+                // whole reciprocal (atan + divide) lifts to slider-rate. Drops 2 atan
+                // and 2 divides/sample. The sibling picks below don't carry a trapped
+                // transcendental, so they stay as readable select2.
+                invCurveScale = attackInvCurveScale + releasing*(releaseInvCurveScale - attackInvCurveScale);
                 zeroVal = select2(releasing, attackZero, releaseZero);
                 maxDerivVal = select2(releasing, attackMaxDerivBase, releaseMaxDerivBase);
+                curveSqrtInner = select2(releasing, attackCurveSqrtInner, releaseCurveSqrtInner);
+                curveInvSqrtInner = select2(releasing, attackCurveInvSqrtInner, releaseCurveInvSqrtInner);
+                curveHalfInvC = select2(releasing, attackCurveHalfInvC, releaseCurveHalfInvC);
 
                 attacking = (prev>lookaheadX)&(att>0);
                 releasing = (prev<lookaheadX)&(rel>0);
                 active = attacking|releasing;
 
-                activeTime = select2(releasing, att, rel);
-                totalNRSteps = (activeTime*ma.SR):max(1);
-                step = 1/totalNRSteps;
+                step = select2(releasing, attStep, relStep);
 
                 // make delta dependent on how much GR we have to do until the full lookahead, so it self corrects
 
@@ -141,7 +165,7 @@ shapedSmoother(x) = lookaheadX:env~(_, _, _)
                 // argument first and evaluate cheapCurveBase ONCE.
                 gonnaDo(phase) = select2(releasing, cb, 1-cb)*totalStep
                     with {
-                        cb = (cheapCurveBase(shape, select2(releasing, 1-phase, phase))-zeroVal)*invCurveScale;
+                        cb = (cheapCurveBaseH(shape, curveSqrtInner, curveInvSqrtInner, curveHalfInvC, select2(releasing, 1-phase, phase))-zeroVal)*invCurveScale;
                     };
 
                 projected = gonnaDo(select2(releasing,
@@ -263,9 +287,7 @@ testSig = os.lf_sawpos(0.5)<:(((_>0.25)*testStep1)+((_>0.5)*testStep2));
 // https://www.desmos.com/calculator/dynyjjkuli
 // with flip horizontal:
 // https://www.desmos.com/calculator/bsr8cdn21v
-// file scope, next to the other curve defs — same math, hoisted sub-terms:
-cheapCurveBaseH(c, sqrtInner, invSqrtInner, halfInvC, x) = (log(c*(x*x-1)+1)+2*sqrtInner*atan(x*invSqrtInner)-2*x)*halfInvC;
-cheapCurveBase(c, x) = (log(c*(pow(x, 2)-1)+1)+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2*x)/(2*c);
+cheapCurveBase(c, x) = (log(c*(x*x-1)+1)+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2*x)/(2*c);
 curveScale(c) = cheapCurveBase(c, 1)-cheapCurveBase(c, 0);
 cheapCurveRelease(c, x) = (cheapCurveBase(c, x)-cheapCurveBase(c, 0))/curveScale(c);
 cheapCurveAttack(c, x) = cheapCurveRelease(c, x*-1+1)*-1+1;
@@ -275,13 +297,26 @@ cheapCurveAttack(c, x) = cheapCurveRelease(c, x*-1+1)*-1+1;
 // as cheapCurveRelease/Attack.
 //   invScale = 1/curveScale(c)
 //   zero     = cheapCurveBase(c, 0)
+// v0.3.6: hoisted-term variant of cheapCurveBase, used only by env's audio-rate
+// call site (gonnaDo). Identical math to cheapCurveBase; the per-shape
+// sub-expressions are passed in precomputed instead of recomputed per sample:
+//   sqrtInner    = sqrt(1/c - 1)
+//   invSqrtInner = 1/sqrtInner
+//   halfInvC     = 1/(2c)
+// Drops 1 sqrt + 1 div (the 1/c) per sample bit-for-bit; the other two divisions
+// become multiply-by-reciprocal, i.e. equal to cheapCurveBase to <=1 ULP (~1e-16,
+// inaudible). For strict bit-exactness write atan(x/sqrtInner) and /(2*c) here
+// instead (keeps the sqrt + 1/c win, leaves those two as divides).
+cheapCurveBaseH(c, sqrtInner, invSqrtInner, halfInvC, x) =
+    (log(c*(x*x-1)+1)+2*sqrtInner*atan(x*invSqrtInner)-2*x)*halfInvC;
+
 cheapCurveReleaseS(c, invScale, zero, x) = (cheapCurveBase(c, x)-zero)*invScale;
 cheapCurveAttackS(c, invScale, zero, x) = cheapCurveReleaseS(c, invScale, zero, x*-1+1)*-1+1;
 
 // Base (unscaled) derivatives — these are the raw x(1-x)/denominator without
 // dividing by curveScale.
-derivativeBaseRelease(c, x) = x*(1-x)/(c*pow(x, 2)+1-c);
-derivativeBaseAttack(c, x) = x*(1-x)/(c*pow(x, 2)+1-(2*c*x));
+derivativeBaseRelease(c, x) = x*(1-x)/(c*x*x+1-c);
+derivativeBaseAttack(c, x) = x*(1-x)/(c*x*x+1-(2*c*x));
 
 // Scaled derivatives (divided by curveScale) — used only where the actual
 // envelope value is needed, not in the inverse path.
