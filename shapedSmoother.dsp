@@ -70,7 +70,43 @@ import("auc_poly.lib");
 //
 // Everything else is byte-identical to v0.3.
 
-process = test2@(att_samples+brake_samples+rel_hold_samples), shapedSmoother(test2);
+// ============================================================================
+//  GUI — every user-facing control in one place.
+//
+//  Single source of truth for the group names: the three *Group functions
+//  below. `vgroup("[1]Smoother", x)` is precisely what the old
+//  "v:[1]Smoother/..." label prefix desugars to, and Faust merges groups by
+//  path, so wrapping each control in SmootherGroup(...) yields an identical UI
+//  tree. Renaming a group is now a one-line edit here.
+//
+//  Controls carry RAW slider values only; ms->s scaling and AUC compensation
+//  live at the use sites (att / rel / rel_hold in the Parameters block). The
+//  shape sliders (attackShapeSlider / releaseShapeSlider) keep their names so
+//  the AUC level compensation (aucLevelMultFormula, baked into aucLevelMult in
+//  auc_poly.lib) and env()'s shapeMap() can reference them unchanged.
+// ============================================================================
+MainGroup(x)     = hgroup("[0]shapedSmoother", x);
+TestGroup(x)     = vgroup("[0]Test signal", x);
+SmootherGroup(x) = vgroup("[1]Smoother", x);
+
+// --- Test signal ---
+testNoiseLevel = TestGroup(hslider("[0]noise level", 0, 0, 1, 0.001));
+testNoiseRate  = TestGroup(hslider("[1]noise rate", 42, 1, 1000, 1));
+testBlockscale = TestGroup(hslider("[2]blockscale", 1, 0.01, 10, 0.01));
+testFreq       = TestGroup(hslider("[3]freq", 1, 0.001, 4, 0.001));
+testStep1      = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
+testStep2      = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
+
+// --- Smoother (raw; scaled att/rel/rel_hold are derived in Parameters) ---
+attMs              = SmootherGroup(hslider("[0]att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01));
+attackShapeSlider  = SmootherGroup(hslider("[1]attack shape", 0, 0, 1, 0.001));
+attAucComp         = SmootherGroup(checkbox("[2]att auc comp"));
+relMs              = SmootherGroup(hslider("[3]rel[scale:log]", 0.05*1000, 1, 5000, 0.1));
+releaseShapeSlider = SmootherGroup(hslider("[4]release shape", 0, 0, 1, 0.001));
+relAucComp         = SmootherGroup(checkbox("[5]rel auc comp"));
+relHoldMs          = SmootherGroup(hslider("[6]rel hold[unit:ms]", 50, 0, maxRelHold*1000, 1));
+
+process = MainGroup((test2@(att_samples+brake_samples+rel_hold_samples), shapedSmoother(test2)));
 shapedSmoother(x) = lookaheadX:env~(_, _, _)
     with {
         // Release hold, ported from lamb-rs (lamb.dsp `releaseHold` inside
@@ -217,12 +253,6 @@ maxBrakeSamples = maxBrake*maxSR;
 maxRelHoldSamples = maxRelHold*maxSR;
 maxTotalSamples = (maxHold+maxBrake)*maxSR;
 
-// Raw shape sliders. Named here so the AUC level compensation (aucLevelMultFormula
-// below, baked into aucLevelMult in auc_poly.lib) can use them, and so env() can
-// shapeMap() them.
-attackShapeSlider = hslider("attack shape", 0, 0, 1, 0.001);
-releaseShapeSlider = hslider("release shape", 0, 0, 1, 0.001);
-
 // AUC level compensation.
 // Goal: changing the shape must NOT change the average level. A single-step
 // response of duration T has time-area  T * AUC_attack(shape) * step. We scale
@@ -245,27 +275,26 @@ releaseShapeSlider = hslider("release shape", 0, 0, 1, 0.001);
 // only partially compensates the level.
 
 // On/off for the AUC level compensation, independently for att and rel.
+// The checkboxes (attAucComp / relAucComp) are declared in the GUI block.
 // When off the multiplier is exactly 1.0, i.e. att/rel revert to the raw
 // slider values — and the reported latency goes back to being
 // shape-independent (see the AUC comment on the att/rel sliders).
-attAucComp = checkbox("att auc comp");
-relAucComp = checkbox("rel auc comp");
-
+//
 // Blend the multiplier toward 1.0 when the switch is off. Branchless on
 // purpose: `on` is 0 or 1 so it's exact, the multiplier is clamped to [0,1]
 // so `on*(m-1)` can't blow up, and this is slider-rate regardless.
 // aucLevelMult comes from auc_poly.lib (imported at the top).
 aucLevelMultSwitched(on, s) = 1+on*(aucLevelMult(s)-1);
 
-att = hslider("att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01)/1000*aucLevelMultSwitched(attAucComp, attackShapeSlider);
+att = attMs/1000*aucLevelMultSwitched(attAucComp, attackShapeSlider);
 att_samples = att*ma.SR:max(1);
 half_att_samples = (0.5*att_samples):max(1);
-rel = hslider("rel[scale:log]", 0.05*1000, 1, 5000, 0.1)/1000*aucLevelMultSwitched(relAucComp, releaseShapeSlider);
+rel = relMs/1000*aucLevelMultSwitched(relAucComp, releaseShapeSlider);
 rel_samples = rel*ma.SR:max(1);
 
 // Release hold (ported from lamb-rs): linear scale, allows 0 (off).
 // Default 50 ms matches lamb's `[08]release hold`.
-rel_hold = hslider("rel hold[unit:ms]", 50, 0, maxRelHold*1000, 1)*0.001;
+rel_hold = relHoldMs*0.001;
 rel_hold_samples = rel_hold*ma.SR;
 
 // Brake window length per spec:
@@ -273,17 +302,17 @@ rel_hold_samples = rel_hold*ma.SR;
 //   = max(att, rel) if both att AND rel are shorter than 50 ms.
 // (min(50ms, max(att,rel)) gives exactly this.)
 brake_samples = min(maxBrakeSamples, max(att_samples, rel_samples)):max(1);
-test3 = os.lf_squarewave(hslider("freq", 1, 0.001, 4, 0.001));
+
+test3 = os.lf_squarewave(testFreq);
 
 // Test signal
-test2 = it.interpolate_linear(hslider("noise level", 0, 0, 1, 0.001),
+test2 = it.interpolate_linear(testNoiseLevel,
     (loop~_),
-    no.lfnoise(hslider("noise rate", 42, 1, 1000, 1)))
+    no.lfnoise(testNoiseRate))
     with {
-        loop(prev) = no.lfnoise0(blockscale*(abs(prev*69)%9:pow(0.75)*5+1));
-        blockscale = hslider("blockscale", 1, 0.01, 10, 0.01);
+        loop(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
     };
-testSig = os.lf_sawpos(0.5)<:(((_>0.25)*hslider("step1", 0.75, -1, 1, 0.001))+((_>0.5)*hslider("step2", 0.125, -1, 1, 0.001)));
+testSig = os.lf_sawpos(0.5)<:(((_>0.25)*testStep1)+((_>0.5)*testStep2));
 
 // *************************************** the NEW curves: ******************************
 // New curves by nuchi:
