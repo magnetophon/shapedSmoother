@@ -51,7 +51,6 @@ import("stdfaust.lib");
 //  - testNoiseLevel: crossfade between the deterministic part and lfnoise
 //  - testNoiseRate:  rate of the lfnoise component
 //  - testBlockscale: scales the rate of the deterministic random-walk
-//  - testFreq:       (unused here, was for a square-wave variant)
 
 testNoiseLevel = hslider("noise level", 0, 0, 1, 0.001);
 testNoiseRate = hslider("noise rate", 42, 1, 1000, 1);
@@ -224,7 +223,7 @@ releaseShapeSlider = hslider("release shape", 0, 0, 1, 0.001);
 
 // Derived parameters
 maxHold = 0.05;
-// max lookahead window (seconds)
+// max buffer size for slidingMin allocation (seconds)
 maxSR = 48000;
 maxHoldSamples = maxHold*maxSR;
 
@@ -347,9 +346,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 // For ATTACK: gonnaMakeIt (will we overshoot?) picks the branch.
                 //   If yes -> top (decel), if no -> bottom (accel).
                 //
-                // For RELEASE: we use the phase relative to the peak and whether
-                //   the target is growing, to avoid a spurious velocity spike on
-                //   the deceleration tail.
+                // For RELEASE: gonnaMakeIt likewise picks the branch.
                 gonnaDo(phase) = select2(releasing, cb, 1-cb)*totalStep
                     with {
                         cb = (cheapCurveBase(shape,
@@ -360,9 +357,6 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                     inverseDerivativeBottomAttack(shape, clampedRatio),
                     inverseDerivativeTopRelease(shape, clampedRatio)))+prev;
                 gonnaMakeIt = (projected>lookaheadX);
-
-                releaseUseBottom = (prevPhase<releasePeakPhase)|(totalStep>prevTotalStep);
-                releaseGonnaMakeIt = gonnaMakeIt|((prevPhase>=releasePeakPhase)&(lookaheadX<=lookaheadX'));
 
                 phaseAtMatchingSpeed = select2(releasing,
                     // Attack branch
