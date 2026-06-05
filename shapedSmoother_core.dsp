@@ -52,9 +52,32 @@ import("stdfaust.lib");
 //  - testNoiseRate:  rate of the lfnoise component
 //  - testBlockscale: scales the rate of the deterministic random-walk
 
-testNoiseLevel = hslider("noise level", 0, 0, 1, 0.001);
-testNoiseRate = hslider("noise rate", 42, 1, 1000, 1);
-testBlockscale = hslider("blockscale", 1, 0.01, 10, 0.01);
+// ============================================================================
+//  GUI — every user-facing control in one place.
+//
+//  Single source of truth for the group names: the three *Group functions
+//  below. `vgroup("[1]Smoother", x)` is precisely what the old
+//  "v:[1]Smoother/..." label prefix desugars to, and Faust merges groups by
+//  path, so wrapping each control in SmootherGroup(...) yields an identical UI
+//  tree. Renaming a group is now a one-line edit here.
+//
+//  Controls carry RAW slider values only; ms->s scaling and AUC compensation
+//  live at the use sites (att / rel / rel_hold in the Parameters block). The
+//  shape sliders (attackShapeSlider / releaseShapeSlider) keep their names so
+//  the AUC level compensation (aucLevelMultFormula, baked into aucLevelMult in
+//  auc_poly.lib) and env()'s shapeMap() can reference them unchanged.
+// ============================================================================
+MainGroup(x) = hgroup("[0]shapedSmoother", x);
+TestGroup(x) = vgroup("[0]Test signal", x);
+SmootherGroup(x) = vgroup("[1]Smoother", x);
+
+// --- Test signal ---
+testNoiseLevel = TestGroup(hslider("[0]noise level", 0, 0, 1, 0.001));
+testNoiseRate = TestGroup(hslider("[1]noise rate", 42, 1, 1000, 1));
+testBlockscale = TestGroup(hslider("[2]blockscale", 1, 0.01, 10, 0.01));
+testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 4, 0.001));
+testStep1 = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
+testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
 
 testSignal = it.interpolate_linear(testNoiseLevel,
     (loop~_),
@@ -213,17 +236,15 @@ inverseDerivativeBottomAttack(c, D) = 1-inverseDerivativeBottomRelease(c, D);
 //  same speed as it currently has, then continues from there. This gives
 //  smooth, glitch-free transitions even with rapidly changing input.
 
-// Slider controls
-attMs = hslider("att[scale:log]", 5, 0.046, 50, 0.01);
-// attack time ms
-relMs = hslider("rel[scale:log]", 50, 1, 5000, 0.1);
-// release time ms
-attackShapeSlider = hslider("attack shape", 0, 0, 1, 0.001);
-releaseShapeSlider = hslider("release shape", 0, 0, 1, 0.001);
+// --- Smoother (raw; scaled att/rel/rel_hold are derived in Parameters) ---
+attMs = SmootherGroup(hslider("[0]att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01));
+attackShapeSlider = SmootherGroup(hslider("[1]attack shape", 0, 0, 1, 0.001));
+relMs = SmootherGroup(hslider("[3]rel[scale:log]", 0.05*1000, 1, 5000, 0.1));
+releaseShapeSlider = SmootherGroup(hslider("[4]release shape", 0, 0, 1, 0.001));
 
 // Derived parameters
 maxHold = 0.05;
-// max buffer size for slidingMin allocation (seconds)
+// max release hold time (seconds)
 maxSR = 48000;
 maxHoldSamples = maxHold*maxSR;
 
