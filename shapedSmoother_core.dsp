@@ -331,17 +331,21 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 
                 // --- Step 4: Compute totalStep (the full span of this transition) ---
                 //
-                // If the target hasn't moved, totalStep stays the same as last sample.
-                // If it has moved, we recompute based on how far we've come (fracDone)
-                // and where we still need to go (lookaheadX - prev).
+                // Release: recompute only when the target actually moved or we
+                // just entered release (prevTotalStep <= 0 means we were
+                // attacking or idle). Hold prevTotalStep otherwise to prevent
+                // floating-point drift in the fracDone round-trip.
+                // Velocity matching (Step 5) keeps speed continuous when
+                // totalStep changes, by finding the phase whose derivative
+                // compensates for the new span.
                 //
-                // The min/max clamp ensures:
-                //   - Attack: span can only shrink (target got closer or we advanced)
-                //   - Release: span can only grow (target got further or we advanced)
-                // This prevents oscillation when the target jiggles.
+                // Attack: the min clamp is unchanged — span can only shrink.
+                rawTotalStep = (lookaheadX-prev)+prevTotalStep*fracDone;
+                needsRecompute = (lookaheadX != lookaheadX') | (prevTotalStep <= 0);
+
                 totalStep = select2(releasing,
-                    ((lookaheadX-prev)+prevTotalStep*fracDone):min(prevTotalStep),
-                    ((lookaheadX-prev)+prevTotalStep*fracDone):max(prevTotalStep))*active;
+                    rawTotalStep:min(prevTotalStep),
+                    select2(needsRecompute, prevTotalStep, rawTotalStep))*active;
 
                 // --- Step 5: Velocity matching ---
                 //
