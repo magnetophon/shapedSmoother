@@ -1,3 +1,9 @@
+declare name "shapedSmoother_core";
+declare version "0.1";
+declare author "Bart Brouns";
+declare license "AGPL-3.0-only";
+declare copyright "2026 - 2026, Bart Brouns";
+
 // ============================================================================
 //  shapedSmoother — core algorithm
 //  Extracted from shapedSmoother.dsp v0.3.6 by Bart Brouns (AGPL-3.0-only)
@@ -23,9 +29,6 @@ import("stdfaust.lib");
 //    input
 //      |
 //      v
-//    release hold  — prevents the envelope from rising for a short window
-//      |              after it drops, avoiding false releases on transients
-//      v
 //    slidingMin    — lookahead: finds the minimum in the next `att` samples,
 //      |              so the envelope can START falling before a transient hits
 //      v
@@ -38,7 +41,7 @@ import("stdfaust.lib");
 //  The key insight is that attack and release are NOT exponential filters.
 //  Instead, the envelope traverses a pre-defined curve shape over a fixed
 //  number of samples. The curve shape is controlled by a single parameter
-//  `c` (0..1) that morphs from nearly-linear to very sharp/sudden.
+//  `c` (0..1) that morphs from s-shaped to very sharp/sudden.
 
 // ============================================================================
 //  1. TEST SIGNAL
@@ -341,7 +344,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 //
                 // Attack: the min clamp is unchanged — span can only shrink.
                 rawTotalStep = (lookaheadX-prev)+prevTotalStep*fracDone;
-                needsRecompute = (lookaheadX != lookaheadX') | (prevTotalStep <= 0);
+                needsRecompute = (lookaheadX!=lookaheadX')|(prevTotalStep<=0);
 
                 totalStep = select2(releasing,
                     rawTotalStep:min(prevTotalStep),
@@ -462,11 +465,6 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 //    The sliding minimum of the input over the next att_samples. This is
 //    the envelope's target: the lowest value it will need to reach within
 //    the attack window.
-//
-//  release hold:
-//    (Omitted from this core file for clarity.) A short window after the
-//    envelope drops during which it is not allowed to rise, preventing
-//    false releases on closely-spaced transients.
 //
 //  AUC compensation:
 //    (Omitted from this core file for clarity.) Adjusts the attack/release
