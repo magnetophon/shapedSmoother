@@ -350,7 +350,12 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                     select2(releasing, 1-prevPhase, prevPhase));
 
                 // Express current speed as a ratio of the new span
-                speedRatio = prevSpeed/totalStep;
+                // When idle, totalStep and prevSpeed are both 0.
+                // Guard the denominator so speedRatio = 0/ε = 0
+                // rather than 0/0 = NaN (which would persist in
+                // prevPhase and poison all subsequent samples,
+                // since IEEE 754 says NaN * 0 = NaN).
+                speedRatio = prevSpeed/(totalStep+(1-active)*1e-30);
                 clampedRatio = max(0, min(speedRatio, maxDerivVal));
 
                 // Find the phase on the curve that has this speed.
