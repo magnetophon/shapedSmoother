@@ -353,8 +353,9 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 // --- Step 5: Velocity matching ---
                 //
                 // What speed is the envelope currently moving at?
-                prevSpeed = prevTotalStep*derivativeBaseRelease(shape,
-                    select2(releasing, 1-prevPhase, prevPhase));
+                // Use the ACTUAL output velocity, so that any external
+                // algorithms that modify `prev` are automatically accounted for.
+                prevSpeed = prev-prev';
 
                 // Express current speed as a ratio of the new span
                 // When idle, totalStep and prevSpeed are both 0.
@@ -362,7 +363,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 // rather than 0/0 = NaN (which would persist in
                 // prevPhase and poison all subsequent samples,
                 // since IEEE 754 says NaN * 0 = NaN).
-                speedRatio = prevSpeed/(totalStep+(1-active)*1e-30);
+                speedRatio = prevSpeed/(totalStep*invCurveScale*step+(1-active)*1e-30);
                 clampedRatio = max(0, min(speedRatio, maxDerivVal));
 
                 // Find the phase on the curve that has this speed.
