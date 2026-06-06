@@ -1,5 +1,5 @@
 declare name "shapedSmoother_core";
-declare version "0.1";
+declare version "0.2";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
@@ -13,6 +13,13 @@ declare copyright "2026 - 2026, Bart Brouns";
 //    2. The shaped curve functions (attack & release shapes)
 //    3. The envelope follower core (env)
 //  with explanations of how everything fits together.
+//
+//  v0.2 changes:
+//    Extended attack and release curves into mirrored "pre-attack" and
+//    "pre-release" regions (phase ∈ [-1, 0]) to achieve C¹-continuous
+//    direction reversals.  When a new attack begins mid-release (or vice
+//    versa), the envelope smoothly decelerates its current motion, reaches
+//    zero velocity at phase = 0, then begins the new direction — no kink.
 // ============================================================================
 
 import("stdfaust.lib");
@@ -42,6 +49,40 @@ import("stdfaust.lib");
 //  Instead, the envelope traverses a pre-defined curve shape over a fixed
 //  number of samples. The curve shape is controlled by a single parameter
 //  `c` (0..1) that morphs from s-shaped to very sharp/sudden.
+//
+//  --- Pre-attack / pre-release extension (v0.2) ---
+//
+//  The attack curve is defined for phase ∈ [0, 1]. We mirror it around
+//  phase = 0 to create a "pre-attack" region for phase ∈ [-1, 0]:
+//
+//    value
+//      1 |          *
+//        |        * | *
+//        |      *   |   *
+//        |    *     |     *
+//        |  *       |        *
+//      0 |*_________|__________*___
+//       -1          0          1   phase
+//             pre-attack   attack
+//
+//  In the pre-attack region the envelope is still moving in the previous
+//  direction (upward, from the release), decelerating to zero velocity at
+//  phase = 0, then seamlessly entering the normal attack curve.
+//
+//  The same mirroring applies to the release curve, giving a "pre-release"
+//  region where the envelope decelerates its downward attack motion before
+//  beginning the upward release.
+//
+//  Mathematically, derivativeBaseRelease(c, x) is well-defined for all
+//  real x, and for x outside [0, 1] it naturally returns negative values.
+//  Since the speed formula multiplies by totalStep (which carries the sign
+//  of the transition direction), the extended regions automatically produce
+//  the correct velocity sign without any explicit sign-flipping.
+//
+//  C¹ continuity at the junction (phase = 0):
+//    derivativeBaseRelease(c, 0) = 0*(1-0)/... = 0
+//    derivativeBaseRelease(c, 1) = 1*(1-1)/... = 0
+//  So speed = 0 at the turnaround point from both sides.
 
 // ============================================================================
 //  1. TEST SIGNAL
@@ -166,6 +207,11 @@ cheapCurveAttack(c, x) = 1-cheapCurveRelease(c, 1-x);
 //  The attack derivative uses the flip: d/dx attack(x) = release'(1-x),
 //  but with the denominator adjusted for the substitution u = 1-x:
 //    derivativeBaseAttack(c, x) = x(1-x) / (cx² + 1 - 2cx)
+//
+//  EXTENSION (v0.2): derivativeBaseRelease(c, x) is well-defined for
+//  all real x. For x > 1 or x < 0, the numerator x(1-x) is negative,
+//  so the function returns negative values. This is exploited in the
+//  pre-attack/pre-release regions — no separate derivative functions needed.
 
 derivativeBaseRelease(c, x) = x*(1-x)/(c*x*x+1-c);
 derivativeBaseAttack(c, x) = x*(1-x)/(c*x*x+1-(2*c*x));
@@ -204,6 +250,12 @@ maxDerivativeBaseAttack(c) = derivativeBaseAttack(c, peakPhaseAttack(c));
 //  a quadratic in x. The ± in the quadratic formula gives the two branches.
 //
 //  "Top" = larger phase (past the peak), "Bottom" = smaller phase (before peak).
+//
+//  EXTENSION (v0.2): For D < 0 (pre-attack/pre-release regions), the
+//  discriminant exceeds 1, so sqrt(disc) > 1. This means:
+//    - inverseDerivativeTopRelease gives u > 1  → attack phase < 0  ✓
+//    - inverseDerivativeBottomRelease gives u < 0 → release phase < 0  ✓
+//  The existing formulae work without modification for negative D.
 
 inverseDerivativePart(c, D) = sqrt(max(0, 1-4*D*(1-c)*(c*D+1)));
 
@@ -213,6 +265,30 @@ inverseDerivativeBottomRelease(c, D) = (1-inverseDerivativePart(c, D))/(2*(c*D+1
 // Attack inverses: horizontal flip of the release inverses
 inverseDerivativeTopAttack(c, D) = 1-inverseDerivativeTopRelease(c, D);
 inverseDerivativeBottomAttack(c, D) = 1-inverseDerivativeBottomRelease(c, D);
+
+// --- 2h. Minimum derivative in the pre-regions (v0.2) ---
+//
+//  In the pre-attack region (attack phase ∈ [-1, 0]), the derivative
+//  argument u = 1-phase ∈ [1, 2]. The derivative is monotonically
+//  decreasing (more negative) over this interval because the peak of
+//  |derivative| in u > 1 lies beyond u = 2. So the most extreme value
+//  is at the boundary u = 2 (phase = -1):
+//
+//    derivativeBaseRelease(c, 2) = 2*(1-2)/(4c+1-c) = -2/(1+3c)
+//
+//  For the pre-release region (release phase ∈ [-1, 0]), the argument
+//  is u = phase = -1 at the boundary:
+//
+//    derivativeBaseRelease(c, -1) = (-1)*(1-(-1))/(c+1-c) = -2
+//
+//  These serve as lower clamp bounds for speedRatio, ensuring the
+//  inverse derivative discriminant stays non-negative.
+
+minDerivBasePreAttack(c) = -2/(1+3*c);
+// = derivativeBaseRelease(c, 2)
+
+minDerivBasePreRelease = -2;
+// = derivativeBaseRelease(c, -1), independent of c
 
 // ============================================================================
 //  3. THE ENVELOPE FOLLOWER (env)
@@ -238,6 +314,12 @@ inverseDerivativeBottomAttack(c, D) = 1-inverseDerivativeBottomRelease(c, D);
 //  transition, the envelope finds the point on the NEW curve that has the
 //  same speed as it currently has, then continues from there. This gives
 //  smooth, glitch-free transitions even with rapidly changing input.
+//
+//  v0.2: When the envelope reverses direction (release→attack or vice
+//  versa), speedRatio is negative. The velocity matching now places the
+//  phase in the pre-region ([-1, 0]), where the curve naturally
+//  decelerates to zero before entering the normal transition. This
+//  eliminates the velocity discontinuity at direction changes.
 
 // --- Smoother (raw; scaled att/rel/rel_hold are derived in Parameters) ---
 attMs = SmootherGroup(hslider("[0]att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01));
@@ -289,12 +371,18 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
         attStep = 1/((att*ma.SR):max(1));
         relStep = 1/((rel*ma.SR):max(1));
 
+        // v0.2: minimum derivative bounds for the pre-regions.
+        // These are the most negative derivative values at phase = -1,
+        // used to clamp speedRatio so the inverse discriminant stays ≥ 0.
+        attackMinDerivBase = minDerivBasePreAttack(attackShape);
+        releaseMinDerivBase = minDerivBasePreRelease;
+
         // =======================================================================
         //  env: the recursive core
         //
         //  State carried between samples:
         //    prev          — current envelope value
-        //    prevPhase     — where we are on the curve [0, 1]
+        //    prevPhase     — where we are on the curve [-1, 1]  (was [0, 1])
         //    prevTotalStep — total span of the current transition
         //
         //  Inputs:
@@ -321,6 +409,9 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 zeroVal = select2(releasing, attackZero, releaseZero);
                 maxDerivVal = select2(releasing, attackMaxDerivBase, releaseMaxDerivBase);
 
+                // v0.2: lower clamp for speedRatio (negative = pre-region)
+                minDerivVal = select2(releasing, attackMinDerivBase, releaseMinDerivBase);
+
                 // Per-sample phase increment: 1/(duration_in_samples)
                 step = select2(releasing, attStep, relStep);
 
@@ -328,6 +419,14 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 //
                 // fracDone: what fraction of the total span has been covered,
                 //   according to the curve evaluated at prevPhase.
+                //
+                // v0.2: When prevPhase < 0 (pre-region), the argument to
+                // cheapCurveBase extends beyond [0, 1]. For attack with
+                // prevPhase < 0: argument = 1-prevPhase > 1, giving cbPrev > 1,
+                // so fracDone < 0 — "negative progress". For release with
+                // prevPhase < 0: argument = prevPhase < 0, giving cbPrev < 0,
+                // so fracDone < 0. Both correctly express that we haven't
+                // started the actual transition yet.
                 cbPrev = (cheapCurveBase(shape,
                     select2(releasing, 1-prevPhase, prevPhase))-zeroVal)*invCurveScale;
                 fracDone = select2(releasing, 1-cbPrev, cbPrev);
@@ -364,7 +463,18 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 // prevPhase and poison all subsequent samples,
                 // since IEEE 754 says NaN * 0 = NaN).
                 speedRatio = prevSpeed/(totalStep*invCurveScale*step+(1-active)*1e-30);
-                clampedRatio = max(0, min(speedRatio, maxDerivVal));
+
+                // v0.2: clamp to [minDerivVal, maxDerivVal] instead of
+                // [0, maxDerivVal]. Negative speedRatio means the envelope
+                // is moving opposite to the current transition direction
+                // (e.g., still rising when we need to attack). Clamping to
+                // minDerivVal (not 0) preserves this velocity information
+                // for the pre-region placement.
+                clampedRatio = max(minDerivVal, min(speedRatio, maxDerivVal));
+
+                // v0.2: flag indicating we're in a pre-region (direction
+                // reversal in progress — decelerating toward the turnaround).
+                inPreRegion = (clampedRatio < 0);
 
                 // Find the phase on the curve that has this speed.
                 // This is the KEY trick: instead of resetting the phase when the
@@ -381,6 +491,12 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 //   If yes -> top (decel), if no -> bottom (accel).
                 //
                 // For RELEASE: gonnaMakeIt likewise picks the branch.
+                //
+                // v0.2: In the pre-region (clampedRatio < 0), only one branch
+                // of the inverse gives a valid phase in [-1, 0]:
+                //   - Pre-attack: inverseDerivativeTopAttack    (phase < 0)
+                //   - Pre-release: inverseDerivativeBottomRelease (phase < 0)
+                // We bypass gonnaMakeIt in this case.
                 gonnaDo(phase) = select2(releasing, cb, 1-cb)*totalStep
                     with {
                         cb = (cheapCurveBase(shape,
@@ -394,25 +510,35 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 
                 phaseAtMatchingSpeed = select2(releasing,
                     // Attack branch
-                    select2(gonnaMakeIt,
+                    // v0.2: inPreRegion forces the top branch (the only
+                    // one returning phase < 0 for negative D).
+                    select2(gonnaMakeIt|inPreRegion,
                         inverseDerivativeBottomAttack(shape, clampedRatio),
                         // accel
                         inverseDerivativeTopAttack(shape, clampedRatio)),
-                    // decel
+                    // decel / pre-attack
                     // Release branch
-                    select2(gonnaMakeIt,
+                    // v0.2: inPreRegion forces the bottom branch (the only
+                    // one returning phase < 0 for negative D).
+                    select2(gonnaMakeIt&(1-inPreRegion),
                         inverseDerivativeBottomRelease(shape, clampedRatio),
-                        // accel
+                        // accel / pre-release
                         inverseDerivativeTopRelease(shape, clampedRatio)));
                 // decel
 
                 // --- Step 6: Advance phase and compute output ---
                 //
-                // newPhase = matched phase + one step, clamped to (step, 1-step)
-                // to avoid the curve endpoints where the derivative is zero.
-                newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(step)*active;
+                // newPhase = matched phase + one step
+                // v0.2: clamped to (-1+step, 1-step) instead of (step, 1-step)
+                // to accommodate the pre-regions. The lower bound -1+step
+                // corresponds to the boundary of the mirrored curve.
+                newPhase = (phaseAtMatchingSpeed+step):min(1-step):max(-1+step)*active;
 
-                // Read the curve's derivative at newPhase to get the current speed
+                // Read the curve's derivative at newPhase to get the current speed.
+                // v0.2: For newPhase < 0, derivativeBaseRelease evaluates at an
+                // argument outside [0,1] and returns a negative value, which
+                // when multiplied by totalStep (opposite sign) produces a speed
+                // in the pre-transition direction. No special-casing needed.
                 speed = totalStep*derivativeBaseRelease(shape,
                     select2(releasing, 1-newPhase, newPhase))*invCurveScale;
 
@@ -430,8 +556,9 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 // ============================================================================
 //
 //  phase:
-//    A value in [0, 1] tracking progress through the current attack or
-//    release transition. 0 = just started, 1 = done.
+//    A value in [-1, 1] tracking progress through the current attack or
+//    release transition. Negative values indicate the pre-region (direction
+//    reversal in progress). 0 = turnaround point. 1 = done.
 //
 //  totalStep:
 //    The full amplitude span (in linear gain) of the current transition,
@@ -451,6 +578,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 //  derivativeBaseRelease(c, x):
 //    The speed of the normalized release curve at phase x (unscaled by
 //    curveScale — multiply by invCurveScale for the true derivative).
+//    Well-defined for all real x; negative outside [0, 1].
 //
 //  velocity matching:
 //    When the target changes mid-transition, find the phase on the (possibly
@@ -461,6 +589,12 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 //    "If we take the accelerating branch of the inverse derivative, will
 //    the resulting curve overshoot the target?" If yes, we should be on the
 //    decelerating branch instead.
+//
+//  inPreRegion:
+//    True when speedRatio (and clampedRatio) is negative, meaning the
+//    envelope is still moving in the previous direction. The phase is
+//    placed in [-1, 0] where the extended curve naturally decelerates
+//    to zero before entering the normal transition.
 //
 //  lookaheadX:
 //    The sliding minimum of the input over the next att_samples. This is
