@@ -353,7 +353,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 
                 totalStep = select2(releasing,
                     rawTotalStep:min(prevTotalStep),
-                    select2(needsRecompute, prevTotalStep, rawTotalStep))*active;
+                    select2(needsRecompute, prevTotalStep, rawTotalStep))*active*corrMult;
 
                 // --- Step 5: Velocity matching ---
                 //
@@ -422,10 +422,10 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                     select2(releasing, 1-newPhase, newPhase))*invCurveScale;
 
                 //   // Get the correction multiplier (multiply totalStep by this):
-                mult = overshootCorrectionMult(att_samples_q, shape_q);
-                //   // mult ∈ (0, 1]: 1.0 = no correction, <1 = scale down to prevent overshoot
+                corrMult = overshootCorrectionMult(att_samples_q, shape_q);
+                //   // corrMult  ∈ (0, 1]: 1.0 = no correction, <1 = scale down to prevent overshoot
                 // delta = speed * step = how much the envelope moves this sample
-                delta = speed*step*mult;
+                delta = speed*step;
 
                 // Final output: move toward target but never overshoot the raw input
                 // (which is delayed by att_samples to align with the lookahead).

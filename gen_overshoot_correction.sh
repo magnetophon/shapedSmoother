@@ -31,7 +31,11 @@ att_min_ms="0.046"
 att_max_ms="50.0"
 
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+if [ "${KEEP_WORK:-}" = "1" ]; then
+    echo "work dir (kept): $work" >&2
+else
+    trap 'rm -rf "$work"' EXIT
+fi
 
 # ── Generate a sweep DSP ─────────────────────────────────────────────────
 # $1=dsp $2=natt $3=nshape $4=att_min_ms $5=att_max_ms $6=correction_lib(opt)
@@ -80,7 +84,7 @@ currentShape = float(shapeIdx) / float(max(1, NSHAPE - 1));
 stepInput = 1 - (posInBlock >= SETTLE);
 
 paramSmoother(attMsArg, shapeSlArg, x) =
-    lookaheadX, delayedX : env ~ (_, _, _) : (_, !, !)
+    lookaheadX, delayedX, corrMult : env ~ (_, _, _) : (_, !, !)
 with {
     attP  = attMsArg / 1000.0;
     relP  = REL_MS   / 1000.0;
@@ -101,7 +105,7 @@ with {
 
     corrMult = $oc_mult;
 
-    env(prev, prevPhase, prevTotalStep, lhx, dx) = result, newPhase, totalStep
+    env(prev, prevPhase, prevTotalStep, lhx, dx, cm) = result, newPhase, totalStep
     with {
         attacking = (prev > lhx) & (attP > 0);
         releasing = (prev < lhx) & (relP > 0);
@@ -121,11 +125,15 @@ with {
                         rawTS : min(prevTotalStep),
                         select2(needsRecompute, prevTotalStep, rawTS))
                     * active;
+        // correctedTS: scale the span for speed, velocity matching, and
+        // projection, but keep uncorrected totalStep for feedback so the
+        // correction doesn't compound across samples.
+        correctedTS = totalStep * cm;
         prevSpeed  = prev - prev';
         speedRatio = prevSpeed
-                   / (totalStep * ics * stp + (1 - active) * 1e-30);
+                   / (correctedTS * ics * stp + (1 - active) * 1e-30);
         cr = max(0, min(speedRatio, mdv));
-        gd(ph) = select2(releasing, cb, 1 - cb) * totalStep
+        gd(ph) = select2(releasing, cb, 1 - cb) * correctedTS
         with {
             cb = (ss.cheapCurveBase(shape,
                      select2(releasing, 1 - ph, ph)) - zv) * ics;
@@ -142,11 +150,11 @@ with {
                     ss.inverseDerivativeBottomRelease(shape, cr),
                     ss.inverseDerivativeTopRelease(shape, cr)));
         newPhase = (pms + stp) : min(1 - stp) : max(stp) * active;
-        spd   = totalStep
+        spd   = correctedTS
               * ss.derivativeBaseRelease(shape,
                     select2(releasing, 1 - newPhase, newPhase))
               * ics;
-        delta = spd * stp * corrMult;
+        delta = spd * stp;
         result = min(prev + delta, dx);
     };
 };
@@ -178,7 +186,7 @@ run_sweep() {
     [ -n "$extra_include" ] && extra_I="-I $extra_include"
 
     echo "  [$name] compiling …" >&2
-    (cd "$dir" && faust2plot -double -I "$plugin_dir" $extra_I "$base") >/dev/null 2>&1
+    (cd "$dir" && faust2plot -double -I "$plugin_dir" $extra_I "$base") >/dev/null
 
     echo "  [$name] running ($total blocks × $blk) …" >&2
     "${dsp%.dsp}" -n "$samples" >"${dsp%.dsp}.m"
@@ -242,6 +250,19 @@ else:
 min_mult = min(lut)
 print(f"  mult range: [{min_mult:.6f}, {max(lut):.6f}]", file=sys.stderr)
 print(f"  table: {natt}×{nshape} = {len(lut)} entries", file=sys.stderr)
+
+# Show the worst residual points
+worst = sorted(range(len(overshoot_raw)), key=lambda k: -overshoot_raw[k])[:10]
+print(f"  worst residual points:", file=sys.stderr)
+for rank, k in enumerate(worst):
+    ia, js = k // nshape, k % nshape
+    a_ms = att_min_ms * (att_max_ms / att_min_ms) ** (ia / max(1, natt-1))
+    a_samp = a_ms / 1000.0 * sr
+    shape = js / max(1, nshape-1)
+    old_m = old_lut[k] if (old_lib and os.path.isfile(old_lib)) else 1.0/(1.0+overshoot_raw[k])
+    print(f"    #{rank+1:2d}  att={a_samp:6.2f} samp  shape={shape:.3f}  "
+          f"residual={overshoot_raw[k]:.4f}  old_mult={old_m:.4f}  new_mult={lut[k]:.4f}",
+          file=sys.stderr)
 
 def fmt_waveform(values, per_line=8):
     lines = []
@@ -370,16 +391,17 @@ if [ -f "$out" ]; then
         echo "" >&2
         echo "── Iteration $iter/$max_iters ──" >&2
 
-        gen_sweep_dsp "$work/iter_sweep.dsp" \
+        local_dsp="$work/iter${iter}_sweep.dsp"
+        gen_sweep_dsp "$local_dsp" \
             "$lib_natt" "$lib_nshape" "$iter_att_min_ms" "$iter_att_max_ms" "$out"
-        run_sweep "iter$iter" "$work/iter_sweep.dsp" \
+        run_sweep "iter$iter" "$local_dsp" \
             "$lib_natt" "$lib_nshape" "$out_dir"
 
         status=$(
             PLUGIN="$plugin_base" \
             NATT=$lib_natt NSHAPE=$lib_nshape SR=$sr \
             ATT_MIN_MS=$iter_att_min_ms ATT_MAX_MS=$iter_att_max_ms \
-            MINS="$work/iter_sweep_mins.txt" OUT="$out" \
+            MINS="${local_dsp%.dsp}_mins.txt" OUT="$out" \
             OLD_LIB="$out" CONV_THRESHOLD=$conv_threshold \
             write_lib
         )
@@ -404,6 +426,23 @@ else
 
     floor_mult=${FLOOR_MULT:-2.0}
     echo "=== Initial mode (no existing lib) ===" >&2
+
+    # Write a stub lib so the plugin (which imports it) can compile.
+    # Identity values: mult=1.0, quantizers pass through.
+    echo "  writing stub $out …" >&2
+    cat >"$out" <<'STUB'
+// overshoot_correction.lib — STUB (identity, no correction)
+overshootNATT   = 2;
+overshootNSHAPE = 2;
+overshootATT_MIN_SAMP = 1.0;
+overshootATT_MAX_SAMP = 2.0;
+overshootLOG_RATIO    = 0.6931471805599453;
+overshootSHAPE_MIN    = 0.0;
+overshootSHAPE_MAX    = 1.0;
+overshootCorrectionMult(att_samples, shapeSlider) = 1.0;
+quantizeAttSamples(att_samples) = att_samples;
+quantizeShape(s) = s;
+STUB
 
     # ── Pass 1: full-range boundary detection ──
     echo "" >&2
