@@ -17,6 +17,7 @@ declare copyright "2026 - 2026, Bart Brouns";
 
 import("stdfaust.lib");
 
+import("overshoot_correction.lib");
 // ============================================================================
 //  OVERVIEW
 // ============================================================================
@@ -251,7 +252,10 @@ maxHold = 0.05;
 maxSR = 48000;
 maxHoldSamples = maxHold*maxSR;
 
-att = attMs/1000;
+//   // Snap slider values to the grid the table was measured at:
+attMs_q = quantizeAttMs(attMs);
+shape_q = quantizeShape(attackShapeSlider);
+att = attMs_q/1000;
 rel = relMs/1000;
 att_samples = att*ma.SR:max(1);
 rel_samples = rel*ma.SR:max(1);
@@ -272,7 +276,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
         delayedX = x@int(att_samples);
 
         // --- Precomputed per-shape constants (slider-rate, not audio-rate) ---
-        attackShape = shapeMap(attackShapeSlider);
+        attackShape = shapeMap(shape_q);
         releaseShape = shapeMap(releaseShapeSlider);
 
         attackInvCurveScale = 1/curveScale(attackShape);
@@ -416,8 +420,11 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 speed = totalStep*derivativeBaseRelease(shape,
                     select2(releasing, 1-newPhase, newPhase))*invCurveScale;
 
+                //   // Get the correction multiplier (multiply totalStep by this):
+                mult = overshootCorrectionMult(attMs_q*0.001*ma.SR, shape_q);
+                //   // mult ∈ (0, 1]: 1.0 = no correction, <1 = scale down to prevent overshoot
                 // delta = speed * step = how much the envelope moves this sample
-                delta = speed*step;
+                delta = speed*step*mult;
 
                 // Final output: move toward target but never overshoot the raw input
                 // (which is delayed by att_samples to align with the lookahead).
