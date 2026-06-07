@@ -8,9 +8,10 @@
 //
 // Usage:
 //   import("overshoot_correction.lib");
-//   attMs_q = quantizeAttMs(attMs);
-//   shape_q = quantizeShape(attackShapeSlider);
-//   mult    = overshootCorrectionMult(attMs_q * 0.001 * ma.SR, shape_q);
+//   att_samples_q = quantizeAttSamples(attMs * 0.001 * ma.SR);
+//   shape_q       = quantizeShape(attackShapeSlider);
+//   mult          = overshootCorrectionMult(att_samples_q, shape_q);
+//   att           = att_samples_q / ma.SR;
 //   // mult ∈ (0, 1]: 1.0 = no correction, <1 = scale down totalStep
 //   // Returns 1.0 for att_samples above the table range.
 // ============================================================================
@@ -19,17 +20,11 @@ overshootNATT   = 32;
 overshootNSHAPE = 32;
 
 // ── Table range (the region where correction != 1.0) ─────────────────────
-overshootATT_MIN_MS   = 0.046;
-overshootATT_MAX_MS   = 1.0813110000;
 overshootATT_MIN_SAMP = 2.208;
 overshootATT_MAX_SAMP = 51.902927999999996;
 overshootLOG_RATIO    = 3.157288076350632;
 overshootSHAPE_MIN    = 0.0;
 overshootSHAPE_MAX    = 1.0;
-
-// ── Full slider range (for the quantizers) ────────────────────────────────
-overshootSLIDER_ATT_MIN_MS = 0.046;
-overshootSLIDER_ATT_MAX_MS = 50.0;
 
 // ── LUT lookup ───────────────────────────────────────────────────────────
 overshootCorrectionMult(att_samples, shapeSlider) =
@@ -178,19 +173,18 @@ with {
 };
 
 // ── Quantization helpers ──────────────────────────────────────────────────
-// Snap attMs to the LUT grid. For att above the table range,
+// Snap att_samples to the LUT grid. Above the table range,
 // returns the raw value unchanged (no correction needed there).
-quantizeAttMs(attMs) = select2(attMs > overshootATT_MAX_MS,
-    overshootATT_MIN_MS
-        * pow(overshootATT_MAX_MS / overshootATT_MIN_MS,
+quantizeAttSamples(att_samples) = select2(att_samples > overshootATT_MAX_SAMP,
+    overshootATT_MIN_SAMP
+        * pow(overshootATT_MAX_SAMP / overshootATT_MIN_SAMP,
               float(attIdx) / float(overshootNATT - 1)),
-    attMs)
+    att_samples)
 with {
-    attIdx = int(0.5 + log(max(overshootATT_MIN_MS,
-                              min(overshootATT_MAX_MS, attMs))
-                          / overshootATT_MIN_MS)
-                      / log(overshootATT_MAX_MS / overshootATT_MIN_MS)
-                      * (overshootNATT - 1))
+    attIdx = int(0.5 + log(max(overshootATT_MIN_SAMP,
+                              min(overshootATT_MAX_SAMP, att_samples))
+                          / overshootATT_MIN_SAMP)
+                      / overshootLOG_RATIO * (overshootNATT - 1))
            : max(0) : min(overshootNATT - 1);
 };
 

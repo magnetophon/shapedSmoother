@@ -253,9 +253,10 @@ maxSR = 48000;
 maxHoldSamples = maxHold*maxSR;
 
 //   // Snap slider values to the grid the table was measured at:
-attMs_q = quantizeAttMs(attMs);
+att_samples_q = quantizeAttSamples(attMs*0.001*ma.SR);
 shape_q = quantizeShape(attackShapeSlider);
-att = attMs_q/1000;
+
+att = att_samples_q/ma.SR;
 rel = relMs/1000;
 att_samples = att*ma.SR:max(1);
 rel_samples = rel*ma.SR:max(1);
@@ -421,7 +422,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                     select2(releasing, 1-newPhase, newPhase))*invCurveScale;
 
                 //   // Get the correction multiplier (multiply totalStep by this):
-                mult = overshootCorrectionMult(attMs_q*0.001*ma.SR, shape_q);
+                mult = overshootCorrectionMult(att_samples_q, shape_q);
                 //   // mult ∈ (0, 1]: 1.0 = no correction, <1 = scale down to prevent overshoot
                 // delta = speed * step = how much the envelope moves this sample
                 delta = speed*step*mult;
