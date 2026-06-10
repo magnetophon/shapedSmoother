@@ -1,13 +1,14 @@
 declare name "shapedSmoother_core";
-declare version "0.6";
+declare version "0.7";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // ============================================================================
-//  shapedSmoother — core algorithm, v0.6
+//  shapedSmoother — core algorithm, v0.7
 //
-//  CHANGES vs v0.4: THE TURNAROUND (v0.5), RESTRUCTURED FOR CPU (v0.6).
+//  CHANGES vs v0.4: THE TURNAROUND (v0.5), RESTRUCTURED FOR CPU (v0.6),
+//  TURNAROUND FIXED AT 1 + SHARED INVERSION + SUPPORT RECIPROCAL (v0.7).
 //
 //  An attack arriving while a release was still in flight hit the
 //  clampedRatio floor: the opposite-sign speed matched to phase 0, the
@@ -17,6 +18,18 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  audio-rate transcendentals it introduced designed back out. Per sample
 //  the loop now costs one rational evaluation, one sqrt, a counter and
 //  abs/signum over v0.4 (measured numbers at the bottom of this header).
+//
+//  v0.7 fixes the turnaround budget at 1 (the slider is gone — see the
+//  note above extraSamples; bit-exact, since the slider's default was
+//  already 1) and trims the audio loop twice. First, the forward and
+//  mirror inverse-derivative inversions are consumed mutually
+//  exclusively (matchedPos selects on `turning`), so the ratio is now
+//  selected BEFORE the inversion and one sqrt and one rational
+//  denominator serve both paths — bit-identical output, each consumed
+//  expression tree is unchanged. Second, the support floor multiplies
+//  by slider-rate reciprocals instead of dividing (ulp-level, Step 3)
+//  — that division sat on the recurrence's latency chain and its
+//  removal is most of the measured speedup.
 //
 //  1. MIRRORED ATTACK CURVE / NEGATIVE PHASE. The attack's fraction-done
 //     function is extended to negative phase by even reflection,
@@ -61,13 +74,14 @@ declare copyright "2026 - 2026, Bart Brouns";
 //     gate only ever delays ENTRY into the attack (prevTotalStep >= 0):
 //     once flipped, the schedule is committed and an attack in flight is
 //     never re-gated — the rise sits exactly on the gate's own equality,
-//     so re-testing it would reduce to rounding noise. At
-//     turnaround = 0 the whole feature is inert and — with
-//     exactBranchPick = 1 — v0.4's behavior (corner included) returns
-//     bit-for-bit: the A/B is one slider. The default approximated
-//     branch pick can resolve razor-edge matching recoveries differently
-//     (see Step 5); flip the constant when an exact A/B against v0.4 is
-//     the point.
+//     so re-testing it would reduce to rounding noise. (Up to v0.6 a
+//     `turnaround` slider scaled the budget, and 0 made the feature
+//     inert — with exactBranchPick = 1 that was a bit-for-bit A/B
+//     against v0.4. v0.7 fixes the budget at 1, so that escape hatch is
+//     gone; exactBranchPick remains an independent exact-vs-fitted
+//     switch for the landing projection, see Step 5. The default
+//     approximated branch pick can resolve razor-edge matching
+//     recoveries differently.)
 //
 //     During the hold the in-flight release simply continues — its span
 //     frozen against the (already dropped) target, its phase trusted —
@@ -113,23 +127,29 @@ declare copyright "2026 - 2026, Bart Brouns";
 //     entry from an attack must stay inert there.
 //
 //  COSTS. Latency rises from att_samples to
-//  att_samples + turnaround*(att_samples+1): doubled lookahead at the
-//  default turnaround = 1. Per sample, measured against v0.4 in the
-//  generated C++ (48 kHz, -O3 -ffast-math, block 256, random steps):
-//  v0.4 1.00x, first turnaround draft 2.4x, this version 1.41x — or
-//  1.86x with exactBranchPick = 1. Audio-rate transcendentals per
-//  sample: v0.4 = 1 log, 1 atan, 2 sqrt; this version's default = 0
-//  log, 0 atan, 2 sqrt — fewer than v0.4 itself, because the branch
-//  pick reads slider-rate-fitted cubics instead of evaluating the
-//  curve. (exactBranchPick = 1 brings the log+atan pair back: it is
-//  v0.4's own gonnaMakeIt projection, kept verbatim for bit-parity;
-//  its per-shape constants are hoisted, bit-identically, through the
+//  att_samples + (att_samples+1): the turnaround budget is one full
+//  extra attack, i.e. doubled lookahead. Per sample, measured against
+//  v0.4 in the generated C++ (48 kHz, -O3 -ffast-math, block 256,
+//  random steps): v0.4 1.00x, first turnaround draft 2.4x, v0.6 1.41x
+//  — or 1.86x with exactBranchPick = 1. v0.6 measured against THIS
+//  version, same flags, isolated smoother (input-driven process, no
+//  test-signal cost), Xeon 2.8 GHz: v0.6 = 1.09x of v0.7, at the
+//  defaults and at att = 2 ms / shapes = 0.9 alike. Nearly all of it
+//  is the support-floor reciprocal (Step 3); the shared inversion is
+//  time-neutral on a wide core (the discarded twin ran in parallel on
+//  the divider port) but halves the loop's sqrt count at bit-identical
+//  output. Audio-rate transcendentals per sample: v0.4 = 1 log,
+//  1 atan, 2 sqrt; this version's default = 0 log, 0 atan, 1 sqrt —
+//  the forward and mirror inversions share one evaluation (Step 5),
+//  and the branch pick reads slider-rate-fitted cubics instead of
+//  evaluating the curve. (exactBranchPick = 1 brings the log+atan pair
+//  back: it is v0.4's own gonnaMakeIt projection, kept verbatim; its
+//  per-shape constants are hoisted, bit-identically, through the
 //  direction select.) What the turnaround itself adds is rational and
 //  cheap: the gate's cross-multiplied comparison, the arrival counter,
-//  one extra inverse-derivative sqrt on the mirror branch, signum/abs
-//  in the quadrature, and one more sliding-min level from the doubled
-//  window. The lookahead clamp keeps the generated ring memory at
-//  v0.4's footprint.
+//  signum/abs in the quadrature, and one more sliding-min level from
+//  the doubled window. The lookahead clamp keeps the generated ring
+//  memory at v0.4's footprint.
 //
 //  Everything else — cheap 2-pt Gauss-Legendre increments, trusted phase,
 //  incremental span, guarded landing, float32 conditioning, the fencepost
@@ -216,7 +236,6 @@ inverseDerivativeBottomAttack(c, D) = 1-inverseDerivativeBottomRelease(c, D);
 // --- Smoother controls (raw) ---
 attMs = SmootherGroup(hslider("[0]att[scale:log]", 0.005*1000, 0.046, maxHold*1000, 0.01));
 attackShapeSlider = SmootherGroup(hslider("[1]attack shape", 0, 0, 1, 0.001));
-turnaroundSlider = SmootherGroup(hslider("[2]turnaround", 1, 0, 1, 0.001));
 relMs = SmootherGroup(hslider("[3]rel[scale:log]", 0.05*1000, 1, 5000, 0.1));
 releaseShapeSlider = SmootherGroup(hslider("[4]release shape", 0, 0, 1, 0.001));
 
@@ -227,8 +246,9 @@ maxHoldSamples = maxHold*maxSR;
 maxLookaheadSamples = 2*maxHoldSamples+1;
 
 // Compile-time switch. 1 makes the landing projection inside velocity
-// matching evaluate the exact curve — and with it restores bit-for-bit
-// equality to v0.4 at turnaround = 0 — at the price of an audio-rate
+// matching evaluate the exact curve — v0.4's own projection, verbatim
+// (the bit-for-bit v0.4 A/B it used to enable required turnaround = 0,
+// which v0.7 removed) — at the price of an audio-rate
 // log+atan pair, the single most expensive thing in the loop (see
 // COSTS). The default evaluates per-direction cubics fitted to the
 // curve's deceleration tail at slider rate instead; the pick they
@@ -244,18 +264,21 @@ rel = relMs/1000;
 att_samples = att*ma.SR:max(1);
 rel_samples = rel*ma.SR:max(1);
 
-// Turnaround budget. The deepest mirror anchor velocity matching can ever
-// produce is peakPhaseAttack < 1, whose traversal costs strictly less than
-// one extra attack duration; extraSamples = att_samples+1 (turnaround = 1)
-// therefore covers every matched turnaround for every shape, without tying
-// the latency to the shape slider. lookaheadSamples is the single source
+// Turnaround budget — fixed at one full extra attack (v0.7; the
+// `turnaround` slider that used to scale this is gone, and 1 was its
+// default, so the hardcoding is bit-exact). The deepest mirror anchor
+// velocity matching can ever produce is peakPhaseAttack < 1, whose
+// traversal costs strictly less than one extra attack duration;
+// extraSamples = att_samples+1 therefore covers every matched
+// turnaround for every shape, without tying the latency to the shape
+// slider. lookaheadSamples is the single source
 // of truth for the window length, the delay, AND the countdown reset: the
 // drop<->arrival bookkeeping in Step 0 is only exact if all three agree.
 // The clamp keeps all three inside the allocation at sample rates above
 // maxSR (the design's stated envelope is 48 kHz; beyond it the lookahead
 // saturates instead of overrunning the sliding-min tree) and, by bounding
 // the delay's interval, halves the generated ring memory.
-extraSamples = int(turnaroundSlider*(att_samples+1));
+extraSamples = int(att_samples+1);
 lookaheadSamples = min(int(att_samples)+extraSamples, int(maxLookaheadSamples));
 
 process = testSignal<:(_@lookaheadSamples, shapedSmoother(_));
@@ -319,6 +342,21 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
         // countdown of Step 0 on the sample.)
         attStep = 1/((att*ma.SR):max(1)+1);
         relStep = 1/((rel*ma.SR):max(1)+1);
+
+        // Reciprocal of the per-direction support-floor denominator
+        // (maxDerivativeBase*invCurveScale*step), hoisted to slider rate
+        // so Step 3 multiplies instead of dividing (v0.7): that division
+        // sat on the recurrence's latency chain, and it is most of
+        // v0.7's measured speedup. Within ~1.5 ulp of the divided form
+        // per sample; like any non-bit-exact change inside the loop it
+        // can resolve a razor-edge branch pick differently and shift one
+        // leg's trajectory transiently before the landing machinery
+        // re-converges it (measured on 30 s of random steps: <= ~1e-4 of
+        // full scale at the defaults, <= ~3e-3 at att = 2 ms /
+        // shapes = 0.9) — the same class of difference the default
+        // branch pick already carries vs exactBranchPick = 1.
+        attackSupportRecip = 1/(attackMaxDerivBase*attackInvCurveScale*attStep);
+        releaseSupportRecip = 1/(releaseMaxDerivBase*releaseInvCurveScale*relStep);
 
         // =======================================================================
         //  env: the recursive core
@@ -495,7 +533,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                 incrementalTotalStep = prevTotalStep+(lookaheadX-lookaheadX')*(1-held);
                 entryTotalStep = lookaheadX-prev;
                 supportTotalStep = select2(releasing, 0-abs(prevSpeed), prevSpeed)
-                    /(maxDerivVal*invCurveScale*step);
+                    *select2(releasing, attackSupportRecip, releaseSupportRecip);
 
                 totalStep = select2(releasing,
                     min(select2(prevTotalStep>=0, incrementalTotalStep, entryTotalStep),
@@ -543,6 +581,22 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                 speedRatio = prevSpeed/(totalStep*invCurveScale*step+(1-active)*1e-30);
                 clampedRatio = max(0, min(speedRatio, maxDerivVal));
 
+                // Shared inverse-derivative inversion (v0.7). The forward
+                // anchors (lateAnchor / forwardPos) and the mirror anchor
+                // (mirrorMatched) are consumed mutually exclusively —
+                // matchedPos selects on `turning` — so the ratio is
+                // selected BEFORE the inversion and one sqrt and one
+                // rational denominator serve both paths. On each consumed
+                // path the expression tree is unchanged, so the output is
+                // bit-identical to evaluating both inversions and
+                // discarding one (what v0.6 did).
+                mirrorD = min(max(0-speedRatio, 0), maxDerivVal);
+                matchD = select2(turning, clampedRatio, mirrorD);
+                partD = inverseDerivativePart(shape, matchD);
+                denD = 2*(shape*matchD+1);
+                topReleaseD = (1+partD)/denD;
+                bottomReleaseD = (1-partD)/denD;
+
                 // gonnaMakeIt projects the landing from the decelerating
                 // anchor and picks by whether the trajectory still reaches
                 // the target. The preference is deliberate: an anchor that
@@ -572,8 +626,8 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                 //   log+atan pair, the single most expensive thing in the
                 //   loop — every sample.
                 lateAnchor = select2(releasing,
-                    inverseDerivativeBottomAttack(shape, clampedRatio),
-                    inverseDerivativeTopRelease(shape, clampedRatio))+matchCorr:min(1);
+                    1-bottomReleaseD,
+                    topReleaseD)+matchCorr:min(1);
 
                 gonnaDo(phase) = (1-fdOf(phase))*totalStep;
                 projected = gonnaDo(lateAnchor)+prev;
@@ -601,12 +655,12 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                 forwardPos = select2(releasing,
                     // Attack branch
                     select2(gonnaMakeIt,
-                        inverseDerivativeBottomAttack(shape, clampedRatio),
-                        inverseDerivativeTopAttack(shape, clampedRatio)),
+                        1-bottomReleaseD,
+                        1-topReleaseD),
                     // Release branch
                     select2(gonnaMakeIt,
-                        inverseDerivativeBottomRelease(shape, clampedRatio),
-                        inverseDerivativeTopRelease(shape, clampedRatio)))+matchCorr:max(0):min(1-step);
+                        bottomReleaseD,
+                        topReleaseD))+matchCorr:max(0):min(1-step);
 
                 // The mirror branch: an attack whose inherited speed still
                 // points UP is a turnaround. The matched anchor is the
@@ -632,8 +686,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                 // the rise early, never late.
                 turning = attacking&(prevSpeed>0);
                 mirrorMatched = max(
-                    (0-inverseDerivativeTopAttack(shape,
-                        min(max(0-speedRatio, 0), maxDerivVal)))+matchCorr,
+                    (0-(1-topReleaseD))+matchCorr,
                     0-matchBudget);
                 mirrorPos = select2(sameDirection, 0-matchBudget, mirrorMatched);
 
@@ -756,9 +809,9 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
 //    completion (reset, never a snap); the DESCENT re-enters as an
 //    ordinary attack via velocity matching, with a fresh span equal to
 //    the true remaining distance — which is what makes the landing
-//    position exact. Sized by the `turnaround` slider (0 = v0.4 behavior
-//    bit-for-bit, 1 = a full extra attack of lookahead, enough for any
-//    matched depth).
+//    position exact. The budget is fixed at one full extra attack of
+//    lookahead (since v0.7; a slider used to scale it), enough for any
+//    matched depth at any shape.
 //
 //  arrival:
 //    Countdown (samples) until the pending window minimum reaches
