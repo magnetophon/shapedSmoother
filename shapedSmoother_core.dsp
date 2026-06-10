@@ -160,7 +160,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _):(_, _, _, !)
         //                    phase can no longer be trusted and we must
         //                    velocity-match.
         // =======================================================================
-        env(prev, prevPhase, prevTotalStep, prevExpected, lookaheadX, delayedX) = result, newPhase, totalStep, expected
+        env(prev, prevPhase, prevTotalStep, prevExpected, lookaheadX, delayedX) = result, newPhase, totalStepOut, expected
             with {
                 // --- Step 1: Are we attacking, releasing, or idle? ---
                 attacking = (prev>lookaheadX)&(att>0);
@@ -249,6 +249,39 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _):(_, _, _, !)
                         inverseDerivativeBottomRelease(shape, clampedRatio),
                         inverseDerivativeTopRelease(shape, clampedRatio)))+matchCorr:max(0):min(1-step);
 
+                // --- Step 5b: monotone anchor during a continuing transition ---
+                //
+                // With a continuously moving target, the span recomputes
+                // every sample and feeds back into the speed ratio:
+                //   - span shrinking (closing target): ratio saturates above
+                //     maxDerivVal, the clamp maps to the derivative's peak,
+                //     and the anchor gets re-pinned there every sample;
+                //   - span growing (receding target): the same speed maps to
+                //     an ever-earlier phase, so the anchor is pushed
+                //     backward and the envelope's acceleration is endlessly
+                //     restarted, while the bottom branch caps the phase just
+                //     below the peak.
+                // Both show up as the phase buzzing at/under the peak while
+                // the envelope tracks badly. The cure: while the transition
+                // CONTINUES (same direction, same gonnaMakeIt branch), the
+                // anchor may never move backward — and during pursuit
+                // (gonnaMakeIt false) it parks AT the peak: maximum-speed
+                // chase, which is the best the curve can do. Backward jumps
+                // remain allowed exactly when they are legitimate: on a
+                // branch change (e.g. the target leaps away near landing and
+                // we must restart accelerating).
+                // The rule must bind ONLY on recurring matching (the noise
+                // feedback), never on the FIRST matched sample after a
+                // trusted stretch: that first sample is the legitimate
+                // velocity match of a discrete retarget, and constraining it
+                // trades speed continuity for a visible kink.
+                attackPeakPhase = peakPhaseAttack(attackShape);
+                peakPhaseDir = select2(releasing, attackPeakPhase, releasePeakPhase);
+                wasMatching = 1-trusted';
+                monotone = wasMatching&sameDirection&(prevPhase>0)&(gonnaMakeIt==gonnaMakeIt');
+                anchorMono = max(matchedPos, prevPhase:min(1-step)):min(select2(gonnaMakeIt, peakPhaseDir, 1-step));
+                anchorMatched = select2(monotone, matchedPos, anchorMono);
+
                 // --- Step 6: advance phase ---
                 //
                 // anchor   = where we are on the curve NOW
@@ -257,8 +290,8 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _):(_, _, _, !)
                 // The 1-step clamp on the anchor guarantees newPhase reaches
                 // exactly 1 on the final sample of a transition (landing),
                 // instead of asymptotically creeping below the target.
-                anchor = select2(trusted, matchedPos, prevPhase:min(1-step));
-                newPhase = (anchor+step)*active;
+                anchor = select2(trusted, anchorMatched, prevPhase:min(1-step));
+                newPhaseRaw = (anchor+step)*active;
 
                 // --- Step 7: exact curve increment + landing ---
                 //
@@ -267,7 +300,21 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _):(_, _, _, !)
                 // quadrature error. Summed over a whole undisturbed
                 // transition this telescopes to exactly totalStep, so the
                 // envelope arrives on target, on time, with no catch-up kink.
-                delta = totalStep*(fdOf(newPhase)-fdOf(anchor));
+                // On monotone samples the span is being recomputed every
+                // sample (moving target), so increments of the stored span no
+                // longer telescope to the true remaining distance — marching
+                // the phase to 1 would end in a teleporting landing snap.
+                // Instead, cover the corresponding fraction of the ACTUAL
+                // remaining distance: each sample moves
+                //   (X-prev) * (fd(new)-fd(anchor)) / (1-fd(anchor)),
+                // which lands exactly on the target at phase 1, continuously.
+                // (This form cannot blow up: the increment never exceeds the
+                // remaining distance.)
+                fdA = fdOf(anchor);
+                fdN = fdOf(newPhaseRaw);
+                deltaCurve = totalStep*(fdN-fdA);
+                deltaMono = (lookaheadX-prev)*(fdN-fdA)/max(1e-30, 1-fdA);
+                delta = select2(monotone&(1-trusted), deltaCurve, deltaMono);
 
                 // The value this loop wants to write. Stored as state so the
                 // next sample can detect outside modification (see Step 4).
@@ -277,9 +324,21 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _):(_, _, _, !)
                 // exactly on the target, absorbing any last floating-point
                 // epsilon. Otherwise: move along the curve, but never above
                 // the raw (delayed) input.
-                landed = active&(newPhase>=1);
+                landed = active&(newPhaseRaw>=1);
                 result = select2(landed,
                     min(expected, delayedX),
                     min(lookaheadX, delayedX));
+
+                // Landing must fully RESET the transition state. If the
+                // phase stayed parked at 1, an envelope tracking a slowly
+                // drifting target through repeated landings would keep
+                // monotone's anchor floor at 1 — and then a big target jump
+                // would be swallowed by the landing snap (a teleport)
+                // instead of restarting a proper shaped transition. With the
+                // state cleared: constant target -> idle as before; drifting
+                // target -> fresh micro-transitions that follow at curve
+                // speed; big jump -> a full new attack/release.
+                newPhase = newPhaseRaw*(1-landed);
+                totalStepOut = totalStep*(1-landed);
             };
     };
