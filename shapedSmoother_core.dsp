@@ -348,7 +348,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 
                 totalStep = select2(releasing,
                     rawTotalStep:min(prevTotalStep),
-                    select2(needsRecompute, prevTotalStep, rawTotalStep))*active;
+                    rawTotalStep:max(prevTotalStep))*active;
 
                 // --- Step 5: Velocity matching ---
                 //
@@ -389,7 +389,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 
                 projected = gonnaDo(select2(releasing,
                     inverseDerivativeBottomAttack(shape, clampedRatio),
-                    inverseDerivativeTopRelease(shape, clampedRatio)))+prev;
+                    inverseDerivativeTopRelease(shape, clampedRatio)+(step*0.5)))+prev;
                 gonnaMakeIt = (projected>lookaheadX);
 
                 phaseAtMatchingSpeed = select2(releasing,
