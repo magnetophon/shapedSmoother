@@ -349,6 +349,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 totalStep = select2(releasing,
                     rawTotalStep:min(prevTotalStep),
                     rawTotalStep:max(prevTotalStep))*active;
+                // select2(needsRecompute, prevTotalStep, rawTotalStep))*active;
 
                 // --- Step 5: Velocity matching ---
                 //
@@ -387,24 +388,27 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                             select2(releasing, 1-phase, phase))-zeroVal)*invCurveScale;
                     };
 
-                // Euler-Maclaurin correction (release only): the output is a
-                // right-endpoint Riemann sum of the curve derivative (speed is
-                // read at phaseAtMatchingSpeed+step), so the distance the
-                // discrete loop will actually cover from a given phase falls
-                // short of the continuous integral (1-cb)*totalStep by
+                // Euler-Maclaurin correction: the output is a right-endpoint
+                // Riemann sum of the curve derivative (speed is read at
+                // phaseAtMatchingSpeed+step), so the distance the discrete
+                // loop will actually cover from a given phase falls short of
+                // the continuous integral gonnaDo() computes by
                 // ~(step/2)*derivNorm(phase)*totalStep — the boundary term of
-                // the Euler-Maclaurin formula (the term at the far end vanishes
-                // because the derivative is 0 at the curve endpoint).
-                // derivativeBase at the inverse-derivative phase IS
-                // clampedRatio by definition, so the correction is free.
-                // Without it, `projected` drifts below lookaheadX along the
-                // decelerating tail, gonnaMakeIt flips back to the
-                // accelerating branch, and the envelope re-bursts into the
-                // target: a kink, severe at sharp shapes where one phase step
-                // spans a large derivative range.
+                // the Euler-Maclaurin formula (the term at the far end
+                // vanishes because the derivative is 0 at the curve endpoint).
+                // Since totalStep carries the direction sign, one expression
+                // covers both: it lowers the release projection and raises the
+                // attack projection. derivativeBase at the inverse-derivative
+                // phase IS clampedRatio by definition, so the correction is
+                // free. Without it, `projected` drifts across lookaheadX along
+                // the decelerating tail, gonnaMakeIt flips back to the
+                // accelerating branch, and the envelope re-bursts: a kink on
+                // release (caught by the delayedX clamp), overshoot below the
+                // target on attack. Severe at sharp shapes, where one phase
+                // step spans a large derivative range.
                 projected = gonnaDo(select2(releasing,
                     inverseDerivativeBottomAttack(shape, clampedRatio),
-                    inverseDerivativeTopRelease(shape, clampedRatio)))+prev-(releasing*0.5*step*clampedRatio*invCurveScale*totalStep);
+                    inverseDerivativeTopRelease(shape, clampedRatio)))+prev-(0.5*step*clampedRatio*invCurveScale*totalStep);
                 gonnaMakeIt = (projected>lookaheadX);
 
                 phaseAtMatchingSpeed = select2(releasing,
@@ -434,9 +438,19 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 // delta = speed * step = how much the envelope moves this sample
                 delta = speed*step;
 
-                // Final output: move toward target but never overshoot the raw input
-                // (which is delayed by att_samples to align with the lookahead).
-                result = min(prev+delta, delayedX);
+                // Final output: move toward target but never overshoot the raw
+                // input (delayed by att_samples to align with the lookahead),
+                // and never overshoot BELOW the attack target. Even with the
+                // corrected projection, the attack arrives at near-peak speed
+                // at sharp shapes (only ~a handful of samples of braking room
+                // past the derivative peak), leaving a landing error of up to
+                // one peak-speed sample; the lower clamp turns that into an
+                // exact stop at lookaheadX. The bound min(prev, lookaheadX) is
+                // inert outside of attack: while releasing or idle it equals
+                // prev, which result never goes below. The two clamps cannot
+                // conflict, since lookaheadX <= delayedX by construction
+                // (the sliding-min window contains the delayed sample).
+                result = min(prev+delta, delayedX):max(min(prev, lookaheadX));
             };
     };
 
@@ -477,10 +491,13 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 //    derivative, which covers slightly less distance than the continuous
 //    curve. `projected` subtracts the first-order boundary term
 //    (step/2 * derivNorm * totalStep) so gonnaMakeIt compares against the
-//    distance the discrete loop will actually cover. Velocity matching pins
+//    distance the discrete loop will actually cover; totalStep's sign makes
+//    the same expression correct for both directions. Velocity matching pins
 //    the integrator to right-endpoint Euler (the realized speed must
 //    correspond exactly to the phase to resume from), so the correction must
-//    live in the projection, not the integrator.
+//    live in the projection, not the integrator. The residual attack landing
+//    error (switching granularity at near-peak speed) is caught by the
+//    max(min(prev, lookaheadX)) clamp on the output.
 //
 //  gonnaMakeIt:
 //    "If we take the accelerating branch of the inverse derivative, will
