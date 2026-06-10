@@ -126,7 +126,16 @@ shapeMap(c) = 1-0.9999*exp(-8.2*pow(c, 1.3));
 //  partial-fraction decomposition). The result is NOT normalized to [0,1]
 //  — that's what curveScale and the Release/Attack wrappers do.
 
-cheapCurveBase(c, x) = (log(c*(x*x-1)+1)+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2*x)/(2*c);
+//  NOTE on arithmetic: the log argument is written c*x*x+(1-c) rather than
+//  the algebraically identical c*(x*x-1)+1. The latter computes a tiny
+//  result (~1-c at small x) as the difference of two near-unit numbers —
+//  in single precision at sharp shapes (1-c ~ 3e-4) that cancellation
+//  costs ~3.5 of float32's ~7 digits, and the noise lands on everything
+//  built from the curve. The rewritten form is a sum of non-negative
+//  terms: fully conditioned. (1-c) itself is exact in float for c >= 0.5
+//  (Sterbenz), i.e. precisely the sharp shapes that need it.
+
+cheapCurveBase(c, x) = (log(c*x*x+(1-c))+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2*x)/(2*c);
 
 // --- 2c. curveScale: normalization factor ---
 //
@@ -167,8 +176,12 @@ cheapCurveAttack(c, x) = 1-cheapCurveRelease(c, 1-x);
 //  but with the denominator adjusted for the substitution u = 1-x:
 //    derivativeBaseAttack(c, x) = x(1-x) / (cx² + 1 - 2cx)
 
-derivativeBaseRelease(c, x) = x*(1-x)/(c*x*x+1-c);
-derivativeBaseAttack(c, x) = x*(1-x)/(c*x*x+1-(2*c*x));
+//  Denominators rewritten as sums of non-negative terms for float32
+//  conditioning at sharp shapes (see the note above cheapCurveBase):
+//    c*x*x+1-c       == c*x*x+(1-c)
+//    c*x*x+1-2*c*x   == c*(x-1)*(x-1)+(1-c)
+derivativeBaseRelease(c, x) = x*(1-x)/(c*x*x+(1-c));
+derivativeBaseAttack(c, x) = x*(1-x)/(c*(x-1)*(x-1)+(1-c));
 
 derivativeRelease(c, x) = derivativeBaseRelease(c, x)/curveScale(c);
 derivativeAttack(c, x) = derivativeBaseAttack(c, x)/curveScale(c);
@@ -324,34 +337,56 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 // Per-sample phase increment: 1/(duration_in_samples)
                 step = select2(releasing, attStep, relStep);
 
-                // --- Step 3: Compute how far along the transition we are ---
+                // --- Step 3: Compute totalStep (the full span of this transition) ---
                 //
-                // fracDone: what fraction of the total span has been covered,
-                //   according to the curve evaluated at prevPhase.
-                cbPrev = (cheapCurveBase(shape,
-                    select2(releasing, 1-prevPhase, prevPhase))-zeroVal)*invCurveScale;
-                fracDone = select2(releasing, 1-cbPrev, cbPrev);
-
-                // --- Step 4: Compute totalStep (the full span of this transition) ---
+                // totalStep is the distance from the (fixed) start of the
+                // current transition to the (moving) target. The envelope's
+                // own progress lives in the phase, not here — so the only
+                // thing that can change the span mid-transition is the target
+                // moving. Integrate exactly that:
                 //
-                // Release: recompute only when the target actually moved or we
-                // just entered release (prevTotalStep <= 0 means we were
-                // attacking or idle). Hold prevTotalStep otherwise to prevent
-                // floating-point drift in the fracDone round-trip.
-                // Velocity matching (Step 5) keeps speed continuous when
-                // totalStep changes, by finding the phase whose derivative
-                // compensates for the new span.
+                //   totalStep = prevTotalStep + (lookaheadX - lookaheadX')
                 //
-                // Attack: the min clamp is unchanged — span can only shrink.
-                rawTotalStep = (lookaheadX-prev)+prevTotalStep*fracDone;
-                needsRecompute = (lookaheadX!=lookaheadX')|(prevTotalStep<=0);
+                // This is the old "hold" generalized: a static target gives a
+                // zero increment and the span is held exactly; a moving
+                // target shrinks or grows the span by exactly its own
+                // movement, in either direction. Unlike reconstructing the
+                // span through the curve (the old rawTotalStep =
+                // remaining + prevTotalStep*fracDone), the state never
+                // round-trips through cheapCurveBase, so there is no
+                // accounting drift to re-inject — and no needsRecompute
+                // heuristic to defeat: noise on the input just makes the
+                // increments zero-mean jitter that sums to the target's net
+                // movement by construction. (This also made fracDone and the
+                // Step 3 curve evaluation dead code; they are gone.)
+                //
+                // On entry into a direction the span is simply the full
+                // remaining distance. Entry is detected by the sign of
+                // prevTotalStep: it carries the sign of the previous
+                // direction (positive release, negative attack, zero idle).
+                //
+                // supportTotalStep is the smallest span whose curve can carry
+                // the current speed (the curve derivative maxes out at
+                // maxDerivVal). When the target jumps closer mid-transition
+                // the span may shrink only down to this floor; below it,
+                // clampedRatio would saturate and the envelope would slow
+                // discontinuously. On the floor it instead decelerates along
+                // the curve at the curve's steepest rate, and any resulting
+                // overshoot is caught by the output clamps in Step 5. One
+                // expression serves both directions: it floors the release
+                // span (both positive) and ceils the attack span (both
+                // negative).
+                incrementalTotalStep = prevTotalStep+(lookaheadX-lookaheadX');
+                entryTotalStep = lookaheadX-prev;
+                supportTotalStep = prevSpeed/(maxDerivVal*invCurveScale*step);
 
                 totalStep = select2(releasing,
-                    rawTotalStep:min(prevTotalStep),
-                    rawTotalStep:max(prevTotalStep))*active;
-                // select2(needsRecompute, prevTotalStep, rawTotalStep))*active;
+                    min(select2(prevTotalStep>=0, incrementalTotalStep, entryTotalStep),
+                        supportTotalStep),
+                    max(select2(prevTotalStep<=0, incrementalTotalStep, entryTotalStep),
+                        supportTotalStep))*active;
 
-                // --- Step 5: Velocity matching ---
+                // --- Step 4: Velocity matching ---
                 //
                 // What speed is the envelope currently moving at?
                 // Use the ACTUAL output velocity, so that any external
@@ -408,7 +443,8 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                 // step spans a large derivative range.
                 projected = gonnaDo(select2(releasing,
                     inverseDerivativeBottomAttack(shape, clampedRatio),
-                    inverseDerivativeTopRelease(shape, clampedRatio)))+prev-(0.5*step*clampedRatio*invCurveScale*totalStep);
+                    inverseDerivativeTopRelease(shape, clampedRatio)))+prev
+                    -(0.5*step*clampedRatio*invCurveScale*totalStep);
                 gonnaMakeIt = (projected>lookaheadX);
 
                 phaseAtMatchingSpeed = select2(releasing,
@@ -425,7 +461,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                         inverseDerivativeTopRelease(shape, clampedRatio)));
                 // decel
 
-                // --- Step 6: Advance phase and compute output ---
+                // --- Step 5: Advance phase and compute output ---
                 //
                 // newPhase = matched phase + one step, clamped to (step, 1-step)
                 // to avoid the curve endpoints where the derivative is zero.
@@ -465,7 +501,11 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 //  totalStep:
 //    The full amplitude span (in linear gain) of the current transition,
 //    from where it started to where it's heading. This scales the normalized
-//    [0,1] curve to actual gain values.
+//    [0,1] curve to actual gain values. Maintained incrementally: held while
+//    the target is static, moved by exactly (lookaheadX - lookaheadX') when
+//    it isn't, recomputed as (lookaheadX - prev) on entry into a direction,
+//    and never allowed to shrink past the span whose curve can still carry
+//    the current speed (supportTotalStep).
 //
 //  step:
 //    Phase increment per sample = 1 / (duration_in_samples). After
