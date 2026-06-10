@@ -115,13 +115,13 @@ testSelect = TestGroup(checkbox("[6]signal select"));
 
 testSignal = select2(testSelect, testSignal1, testSignal2);
 
-testSignal1 = os.lf_squarewave(testFreq)*0.5;
-testSignal2 = it.interpolate_linear(testNoiseLevel,
+testSignal1 = it.interpolate_linear(testNoiseLevel,
     (loop~_),
     no.lfnoise(testNoiseRate))
     with {
         loop(prev) = no.lfnoise0(testBlockscale*(abs(prev*69)%9:pow(0.75)*5+1));
     };
+testSignal2 = os.lf_squarewave(testFreq)*0.5;
 
 // ============================================================================
 //  THE SHAPED CURVES
