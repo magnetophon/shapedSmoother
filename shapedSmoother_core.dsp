@@ -277,8 +277,21 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _):(_, _, _, !)
                 // trades speed continuity for a visible kink.
                 attackPeakPhase = peakPhaseAttack(attackShape);
                 peakPhaseDir = select2(releasing, attackPeakPhase, releasePeakPhase);
+                // Finally, monotone only makes sense while the transition's
+                // geometry actually CONTINUES. A large retarget while the
+                // phase is late (e.g. a block edge crashing the target
+                // during a micro-transition at phase ~0.99) makes the
+                // implied span (remaining distance)/(remaining fraction)
+                // explode — covering it "on schedule" would be a teleport.
+                // Scale-free test: the implied span may at most double in
+                // one sample (per-sample drift changes it by a tiny
+                // fraction; a genuine jump blows it up by orders of
+                // magnitude). When it fails, fall back to a free velocity
+                // match: the proper shaped restart.
+                effSpanPre = (lookaheadX-prev)/max(1e-30, 1-fracDone);
+                spanContinuous = (abs(effSpanPre)<=2*abs(prevTotalStep));
                 wasMatching = 1-trusted';
-                monotone = wasMatching&sameDirection&(prevPhase>0)&(gonnaMakeIt==gonnaMakeIt');
+                monotone = wasMatching&sameDirection&(prevPhase>0)&(gonnaMakeIt==gonnaMakeIt')&spanContinuous;
                 anchorMono = max(matchedPos, prevPhase:min(1-step)):min(select2(gonnaMakeIt, peakPhaseDir, 1-step));
                 anchorMatched = select2(monotone, matchedPos, anchorMono);
 
@@ -312,9 +325,23 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _):(_, _, _, !)
                 // remaining distance.)
                 fdA = fdOf(anchor);
                 fdN = fdOf(newPhaseRaw);
-                deltaCurve = totalStep*(fdN-fdA);
-                deltaMono = (lookaheadX-prev)*(fdN-fdA)/max(1e-30, 1-fdA);
-                delta = select2(monotone&(1-trusted), deltaCurve, deltaMono);
+
+                // effSpan is the span of the curve that passes through the
+                // CURRENT position at the CURRENT phase toward the CURRENT
+                // target. Using it as the increment scale on monotone
+                // samples makes each sample cover the right fraction of the
+                // actual remaining distance (landing exactly at phase 1,
+                // never a teleport), and CRUCIALLY it is also what gets
+                // STORED: if the stored span followed the raw-recompute
+                // policy instead, it would diverge cumulatively from the
+                // span the increments are actually using, and the divergence
+                // would be dumped as a velocity mismatch at the next free
+                // match (the gonnaMakeIt branch flip) — a kink,
+                // deterministically at mid-transition under small noise.
+                monoActive = monotone&(1-trusted)&active;
+                effSpan = (lookaheadX-prev)/max(1e-30, 1-fdA);
+                spanUsed = select2(monoActive, totalStep, effSpan);
+                delta = spanUsed*(fdN-fdA);
 
                 // The value this loop wants to write. Stored as state so the
                 // next sample can detect outside modification (see Step 4).
@@ -339,6 +366,6 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _):(_, _, _, !)
                 // target -> fresh micro-transitions that follow at curve
                 // speed; big jump -> a full new attack/release.
                 newPhase = newPhaseRaw*(1-landed);
-                totalStepOut = totalStep*(1-landed);
+                totalStepOut = spanUsed*(1-landed);
             };
     };
