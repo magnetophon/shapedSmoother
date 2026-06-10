@@ -108,11 +108,15 @@ SmootherGroup(x) = vgroup("[1]Smoother", x);
 testNoiseLevel = TestGroup(hslider("[0]noise level", 0, 0, 1, 0.001));
 testNoiseRate = TestGroup(hslider("[1]noise rate", 42, 1, 1000, 1));
 testBlockscale = TestGroup(hslider("[2]blockscale", 1, 0.01, 10, 0.01));
-testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 4, 0.001));
+testFreq = TestGroup(hslider("[3]freq", 1, 0.001, 30, 0.001));
 testStep1 = TestGroup(hslider("[4]step1", 0.75, -1, 1, 0.001));
 testStep2 = TestGroup(hslider("[5]step2", 0.125, -1, 1, 0.001));
+testSelect = TestGroup(checkbox("[6]signal select"));
 
-testSignal = it.interpolate_linear(testNoiseLevel,
+testSignal = select2(testSelect, testSignal1, testSignal2);
+
+testSignal1 = os.lf_squarewave(testFreq)*0.5;
+testSignal2 = it.interpolate_linear(testNoiseLevel,
     (loop~_),
     no.lfnoise(testNoiseRate))
     with {
