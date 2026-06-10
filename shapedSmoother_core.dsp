@@ -23,13 +23,14 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  note above extraSamples; bit-exact, since the slider's default was
 //  already 1) and trims the audio loop twice. First, the forward and
 //  mirror inverse-derivative inversions are consumed mutually
-//  exclusively (matchedPos selects on `turning`), so the ratio is now
-//  selected BEFORE the inversion and one sqrt and one rational
-//  denominator serve both paths — bit-identical output, each consumed
-//  expression tree is unchanged. Second, the support floor multiplies
-//  by slider-rate reciprocals instead of dividing (ulp-level, Step 3)
-//  — that division sat on the recurrence's latency chain and its
-//  removal is most of the measured speedup.
+//  exclusively (matchedPos selects on `turning`), so the ratio is
+//  direction-folded BEFORE the inversion — a sign flip plus clamp,
+//  exact in float; see Step 5 — and one sqrt and one rational
+//  denominator serve both paths at bit-identical output. Second, the
+//  support floor multiplies by slider-rate reciprocals instead of
+//  dividing (ulp-level, Step 3) — that division sat on the
+//  recurrence's latency chain and its removal is most of the measured
+//  speedup.
 //
 //  1. MIRRORED ATTACK CURVE / NEGATIVE PHASE. The attack's fraction-done
 //     function is extended to negative phase by even reflection,
@@ -133,8 +134,9 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  random steps): v0.4 1.00x, first turnaround draft 2.4x, v0.6 1.41x
 //  — or 1.86x with exactBranchPick = 1. v0.6 measured against THIS
 //  version, same flags, isolated smoother (input-driven process, no
-//  test-signal cost), Xeon 2.8 GHz: v0.6 = 1.09x of v0.7, at the
-//  defaults and at att = 2 ms / shapes = 0.9 alike. Nearly all of it
+//  test-signal cost), Xeon 2.8 GHz: v0.6 = 1.05–1.10x of v0.7
+//  across repeated runs, at the defaults and at att = 2 ms /
+//  shapes = 0.9 alike. Nearly all of it
 //  is the support-floor reciprocal (Step 3); the shared inversion is
 //  time-neutral on a wide core (the discarded twin ran in parallel on
 //  the divider port) but halves the loop's sqrt count at bit-identical
@@ -579,19 +581,25 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                 // same in-transition sentinel as Step 4.
                 matchCorr = halfStep*(sameDirection&(prevTotalStep!=0));
                 speedRatio = prevSpeed/(totalStep*invCurveScale*step+(1-active)*1e-30);
-                clampedRatio = max(0, min(speedRatio, maxDerivVal));
 
                 // Shared inverse-derivative inversion (v0.7). The forward
                 // anchors (lateAnchor / forwardPos) and the mirror anchor
                 // (mirrorMatched) are consumed mutually exclusively —
                 // matchedPos selects on `turning` — so the ratio is
-                // selected BEFORE the inversion and one sqrt and one
-                // rational denominator serve both paths. On each consumed
-                // path the expression tree is unchanged, so the output is
-                // bit-identical to evaluating both inversions and
-                // discarding one (what v0.6 did).
-                mirrorD = min(max(0-speedRatio, 0), maxDerivVal);
-                matchD = select2(turning, clampedRatio, mirrorD);
+                // direction-folded BEFORE the inversion and one sqrt and
+                // one rational denominator serve both paths. The fold is
+                // a sign flip (exact in float), and the clamp identity
+                // max(0, min(y, M)) == min(max(y, 0), M) for M >= 0 makes
+                // the mirror branch's clamp the same value as v0.6's, so
+                // on each consumed path the result is bit-identical to
+                // evaluating both inversions and discarding one (what
+                // v0.6 did). The fold is a sign flip rather than a
+                // select2 of the two clamped ratios deliberately: it
+                // references speedRatio's subtree ONCE. The argument tree
+                // below is multiplied many times at the box level through
+                // gonnaMakeIt's tail fit, and the two-branch form doubled
+                // the faust compile time of the whole file.
+                matchD = max(0, min(speedRatio*(1-2*turning), maxDerivVal));
                 partD = inverseDerivativePart(shape, matchD);
                 denD = 2*(shape*matchD+1);
                 topReleaseD = (1+partD)/denD;
