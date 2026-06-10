@@ -204,8 +204,17 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _):(_, _, _, !)
         attackMaxDerivBase = maxDerivativeBaseAttack(attackShape);
         releaseMaxDerivBase = maxDerivativeBaseAttack(releaseShape);
 
-        attStep = 1/((att*ma.SR):max(1));
-        relStep = 1/((rel*ma.SR):max(1));
+        // Fencepost: a transition occupies the CLOSED interval of N+1 output
+        // samples [entry .. entry+N], so the phase advances in N+1 steps of
+        // 1/(N+1). With 1/N the attack landed one sample early: lookaheadX
+        // drops at m (the new minimum enters the window immediately) while
+        // delayedX delivers the transient at m+480, and N increments
+        // starting ON the entry sample complete at m+479. With 1/(N+1) the
+        // attack's landing snap fires on exactly the sample where delayedX
+        // presents the transient, and a release elapses exactly
+        // rel_samples from onset to target.
+        attStep = 1/((att*ma.SR):max(1)+1);
+        relStep = 1/((rel*ma.SR):max(1)+1);
 
         // =======================================================================
         //  env: the recursive core
