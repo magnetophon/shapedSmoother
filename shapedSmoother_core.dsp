@@ -348,7 +348,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 
                 totalStep = select2(releasing,
                     rawTotalStep:min(prevTotalStep),
-                    select2(needsRecompute, prevTotalStep, rawTotalStep))*active;
+                    rawTotalStep:max(prevTotalStep))*active;
 
                 // --- Step 5: Velocity matching ---
                 //
@@ -387,9 +387,24 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
                             select2(releasing, 1-phase, phase))-zeroVal)*invCurveScale;
                     };
 
+                // Euler-Maclaurin correction (release only): the output is a
+                // right-endpoint Riemann sum of the curve derivative (speed is
+                // read at phaseAtMatchingSpeed+step), so the distance the
+                // discrete loop will actually cover from a given phase falls
+                // short of the continuous integral (1-cb)*totalStep by
+                // ~(step/2)*derivNorm(phase)*totalStep — the boundary term of
+                // the Euler-Maclaurin formula (the term at the far end vanishes
+                // because the derivative is 0 at the curve endpoint).
+                // derivativeBase at the inverse-derivative phase IS
+                // clampedRatio by definition, so the correction is free.
+                // Without it, `projected` drifts below lookaheadX along the
+                // decelerating tail, gonnaMakeIt flips back to the
+                // accelerating branch, and the envelope re-bursts into the
+                // target: a kink, severe at sharp shapes where one phase step
+                // spans a large derivative range.
                 projected = gonnaDo(select2(releasing,
                     inverseDerivativeBottomAttack(shape, clampedRatio),
-                    inverseDerivativeTopRelease(shape, clampedRatio)))+prev;
+                    inverseDerivativeTopRelease(shape, clampedRatio)))+prev-(releasing*0.5*step*clampedRatio*invCurveScale*totalStep);
                 gonnaMakeIt = (projected>lookaheadX);
 
                 phaseAtMatchingSpeed = select2(releasing,
@@ -456,6 +471,16 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _)
 //    When the target changes mid-transition, find the phase on the (possibly
 //    new) curve whose derivative equals the envelope's current speed, then
 //    continue from there. Ensures smooth, jerk-free transitions.
+//
+//  Euler-Maclaurin correction:
+//    The per-sample deltas are a right-endpoint Riemann sum of the curve
+//    derivative, which covers slightly less distance than the continuous
+//    curve. `projected` subtracts the first-order boundary term
+//    (step/2 * derivNorm * totalStep) so gonnaMakeIt compares against the
+//    distance the discrete loop will actually cover. Velocity matching pins
+//    the integrator to right-endpoint Euler (the realized speed must
+//    correspond exactly to the phase to resume from), so the correction must
+//    live in the projection, not the integrator.
 //
 //  gonnaMakeIt:
 //    "If we take the accelerating branch of the inverse derivative, will
