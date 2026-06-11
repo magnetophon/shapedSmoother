@@ -1,14 +1,15 @@
 declare name "shapedSmoother_core";
-declare version "0.7";
+declare version "0.8";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // ============================================================================
-//  shapedSmoother — core algorithm, v0.7
+//  shapedSmoother — core algorithm, v0.8
 //
 //  CHANGES vs v0.4: THE TURNAROUND (v0.5), RESTRUCTURED FOR CPU (v0.6),
-//  TURNAROUND FIXED AT 1 + SHARED INVERSION + SUPPORT RECIPROCAL (v0.7).
+//  TURNAROUND FIXED AT 1 + SHARED INVERSION + SUPPORT RECIPROCAL (v0.7),
+//  HEADING-ARMED COUNTDOWN — STAIRCASE-PROOF SCHEDULING (v0.8).
 //
 //  An attack arriving while a release was still in flight hit the
 //  clampedRatio floor: the opposite-sign speed matched to phase 0, the
@@ -31,6 +32,32 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  dividing (ulp-level, Step 3) — that division sat on the
 //  recurrence's latency chain and its removal is most of the measured
 //  speedup.
+//
+//  v0.8 fixes the turnaround sometimes arriving late. The countdown
+//  used to arm only on drops below the CURRENT envelope; a release
+//  interrupted by a descending staircase would climb — held span,
+//  rise leg — above intermediate input levels that had entered the
+//  window above the envelope, and those levels reached the output tap
+//  with only the hard clamp to duck them: a corner, scheduled for
+//  nobody. The countdown now arms against the envelope's HEADING (the
+//  live release's target; Step 0), so every level the envelope could
+//  climb above carries its own deadline, and the hold then freezes
+//  the span below everything still in flight. Exact per-horizon
+//  scheduling — the ramp-plus-sliding-min of linear-attack limiters —
+//  is not available here: a fixed-duration shaped attack decides its
+//  span at the flip, so a sample's pass-under time cannot be priced
+//  at window entry. The heading rule closes the reachable class
+//  instead; what remains is the one-sample crossing slack and — the
+//  dominant residue — the rise leg's apex, which is placed by the
+//  INHERITED SPEED alone and can still overshoot levels in flight
+//  (capping it at the frozen heading would close that class too, at
+//  the price of a bounded velocity mismatch and one more state word;
+//  designed, not yet landed). Measured on 60 s of noisy staircases
+//  (noise 0.152, blockscale 8.21, att 4.5 ms, rel 14.4 ms,
+//  shapes 0.5/0): clamp corners at transient arrivals 106 -> 28,
+//  corners deeper than 0.01 of full scale 81 -> 15, worst corner
+//  duration 8 -> 2 samples; cost 0.011 of extra average attenuation
+//  and 1.9% more fully-ducked time.
 //
 //  1. MIRRORED ATTACK CURVE / NEGATIVE PHASE. The attack's fraction-done
 //     function is extended to negative phase by even reflection,
@@ -136,8 +163,11 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  version, same flags, isolated smoother (input-driven process, no
 //  test-signal cost), Xeon 2.8 GHz: v0.6 = 1.05–1.10x of v0.7
 //  across repeated runs, at the defaults and at att = 2 ms /
-//  shapes = 0.9 alike. Nearly all of it
-//  is the support-floor reciprocal (Step 3); the shared inversion is
+//  shapes = 0.9 alike. v0.8's arming change costs one max and one
+//  select2 per sample and no state (corner statistics in the v0.8
+//  paragraph above). Nearly all of the v0.7
+//  speedup is the support-floor reciprocal (Step 3); the shared
+//  inversion is
 //  time-neutral on a wide core (the discarded twin ran in parallel on
 //  the divider port) but halves the loop's sqrt count at bit-identical
 //  output. Audio-rate transcendentals per sample: v0.4 = 1 log,
@@ -394,18 +424,42 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                 // window gains one sample and loses one; the min cannot
                 // drop by losing a sample). The entering sample reaches
                 // delayedX after exactly lookaheadSamples. So: on a drop
-                // that lands below the envelope, arm the countdown to
-                // lookaheadSamples; it then names the sample on which the
-                // envelope must have fully ducked.
+                // that lands below the envelope's HEADING, arm the
+                // countdown to lookaheadSamples; it then names the sample
+                // on which the envelope must have fully ducked.
+                //
+                // The heading (v0.8) is where the envelope is going, not
+                // where it is. A live release is heading for its target
+                // — by the incremental-span invariant of Step 3 that is
+                // exactly the pre-drop minimum lookaheadX' — and a later
+                // hold would freeze the span against it, letting the
+                // envelope climb there while the dropped sample is still
+                // in flight toward delayedX. Arming against prev alone
+                // (v0.5–v0.7) missed exactly those: input staircases
+                // whose intermediate levels entered above the envelope
+                // but below where the interrupted release would climb,
+                // arriving at the output tap during the hold, the rise
+                // leg or the early descent — ducked only by the output
+                // clamp, i.e. a corner ("the turnaround is too late").
+                // The max with prev keeps the support floor's deliberate
+                // overshoot (Step 3) covered; when idle or attacking the
+                // heading IS prev and the rule reduces to the old one.
+                // Once a sample is inside the window the heading can
+                // never exceed it (the window minimum is at most that
+                // sample), so every level the envelope could climb above
+                // now carries a deadline; the residue is the rise leg's
+                // curve-mismatch epsilon at the apex and the one-sample
+                // crossing slack.
                 //
                 // Drops while a countdown is pending do not re-arm it. The
                 // first deadline is the binding one; later, deeper minima
                 // ride along as mid-transition retargets and land early
                 // (safe), exactly as in v0.4. Drops that stay above the
-                // envelope bind nothing (the envelope is already below
+                // heading bind nothing (the envelope will stay below
                 // them) and do not arm.
                 drop = lookaheadX<lookaheadX';
-                arm = drop&(lookaheadX<prev)&(prevArrival<=0);
+                armCeiling = max(prev, select2(prevTotalStep>0, prev, lookaheadX'));
+                arm = drop&(lookaheadX<armCeiling)&(prevArrival<=0);
                 arrival = select2(arm, max(prevArrival-1, 0), lookaheadSamples);
 
                 // --- Step 1: direction, gated by the turnaround schedule ---
@@ -823,9 +877,10 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
 //
 //  arrival:
 //    Countdown (samples) until the pending window minimum reaches
-//    delayedX. Armed to lookaheadSamples when lookaheadX drops below the
-//    envelope while nothing is pending; the first deadline binds, later
-//    drops ride along as retargets.
+//    delayedX. Armed to lookaheadSamples when lookaheadX drops below
+//    the envelope's heading — the live release's target, else the
+//    envelope itself (v0.8, Step 0) — while nothing is pending; the
+//    first deadline binds, later drops ride along as retargets.
 //
 //  held:
 //    Wanting to attack while there is still time not to. The flip waits
