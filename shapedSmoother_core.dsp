@@ -1,18 +1,43 @@
 declare name "shapedSmoother_core";
-declare version "0.11";
+declare version "0.12";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // ============================================================================
-//  shapedSmoother — core algorithm, v0.11
+//  shapedSmoother — core algorithm, v0.12
 //
 //  CHANGES vs v0.4: THE TURNAROUND (v0.5), RESTRUCTURED FOR CPU (v0.6),
 //  TURNAROUND FIXED AT 1 + SHARED INVERSION + SUPPORT RECIPROCAL (v0.7),
 //  HEADING-ARMED COUNTDOWN — STAIRCASE-PROOF SCHEDULING (v0.8),
 //  RELEASE BRANCH PICK — NO MORE PHANTOM-SPAN LUNGES (v0.9),
 //  APEX CAPPED AT THE PRE-EPISODE MINIMUM (v0.10),
-//  POSITION-BUDGET DIVISION OFF THE RECURRENCE PATH (v0.11).
+//  POSITION-BUDGET DIVISION OFF THE RECURRENCE PATH (v0.11),
+//  TURNAROUND RETIRED — THE BRAKE (v0.12).
+//
+//  v0.12 retires the turnaround. Its guarantee had narrowed with every
+//  correctness fix (over-capacity speeds and ceiling-bound rises both
+//  velocity-dump), its corrected form had already given back most of
+//  the level retention that motivated it, and its scheduling machinery
+//  — countdown, heading-armed gate, mirror branch, apex ceiling,
+//  position budget — was the parent of every late-corner bug class
+//  (v0.8–v0.10). The brake (Step 1, after v0.3.6) replaces all of it:
+//  a second sliding minimum sees one brake window further than the
+//  attack window, and while a deeper minimum is visible there the
+//  release increment ramps linearly to zero, so the attack always
+//  enters from a standstill through ordinary velocity matching — C1
+//  at any inherited speed, punctual by the plain v0.4 contract
+//  (attacks start the moment the attack window binds and take
+//  att_samples+1), and structurally incapable of sitting above a
+//  level still in flight. Latency is unchanged: att + (att+1), now
+//  spent on warning instead of reversal. Measured on the 60 s noisy
+//  staircase panels: ZERO deep corners at both; the average envelope
+//  sits 0.026–0.039 HIGHER than v0.11, because the release now
+//  targets the attack-window minimum instead of the doubled-window
+//  minimum, so near-term climbs survive; faust compile 3 s (from
+//  25 s); CPU 0.81x of v0.11 under -double -mcd 0 -Ofast. Paragraphs
+//  below this one describe the retired versions and are kept as
+//  history.
 //
 //  An attack arriving while a release was still in flight hit the
 //  clampedRatio floor: the opposite-sign speed matched to phase 0, the
@@ -338,28 +363,31 @@ rel = relMs/1000;
 att_samples = att*ma.SR:max(1);
 rel_samples = rel*ma.SR:max(1);
 
-// Turnaround budget — fixed at one full extra attack (v0.7; the
-// `turnaround` slider that used to scale this is gone, and 1 was its
-// default, so the hardcoding is bit-exact). The deepest mirror anchor
-// velocity matching can ever produce is peakPhaseAttack < 1, whose
-// traversal costs strictly less than one extra attack duration;
-// extraSamples = att_samples+1 therefore covers every matched
-// turnaround for every shape, without tying the latency to the shape
-// slider. lookaheadSamples is the single source
-// of truth for the window length, the delay, AND the countdown reset: the
-// drop<->arrival bookkeeping in Step 0 is only exact if all three agree.
-// The clamp keeps all three inside the allocation at sample rates above
-// maxSR (the design's stated envelope is 48 kHz; beyond it the lookahead
-// saturates instead of overrunning the sliding-min tree) and, by bounding
-// the delay's interval, halves the generated ring memory.
-extraSamples = int(att_samples+1);
-lookaheadSamples = min(int(att_samples)+extraSamples, int(maxLookaheadSamples));
+// Brake budget (v0.12). The brake horizon extends the lookahead by
+// brake_samples beyond the attack window, purely so an upcoming attack
+// is visible early enough for the release to glide to a stop before
+// the attack window binds. One full extra attack keeps the total
+// latency identical to the turnaround versions (v0.5–v0.11); sizing it
+// larger (e.g. min(maxBrakeSamples, max(att, rel) in samples)) brakes
+// more gently at more latency — the deceleration magnitude is
+// speed/brake. lookaheadSamples is the single source of truth for the
+// delay-line length and the latency.
+brake_samples = int(att_samples)+1;
+brakeStep = 1/max(brake_samples, 1);
+lookaheadSamples = min(int(att_samples)+brake_samples, int(maxLookaheadSamples));
 
 process = testSignal<:(_@lookaheadSamples, shapedSmoother(_));
 
-shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, !)
+shapedSmoother(x) = lookaheadX, lookaheadBrake, delayedX:env~(_, _, _, _):(_, _, _, !)
     with {
-        lookaheadX = x:ba.slidingMin(lookaheadSamples+1, 1+maxLookaheadSamples);
+        // Attack window: the minimum over the next att_samples of the
+        // delayed signal — the sliding minimum of the raw input over
+        // att_samples+1, re-aligned by the brake delay.
+        lookaheadX = x:ba.slidingMin(int(att_samples)+1, 1+maxLookaheadSamples)@brake_samples;
+        // Brake horizon: the minimum over the full lookahead. A strict
+        // superset of the attack window, so lookaheadBrake <= lookaheadX
+        // always; the gap between the two is the brake's early warning.
+        lookaheadBrake = x:ba.slidingMin(lookaheadSamples+1, 1+maxLookaheadSamples);
         delayedX = x@lookaheadSamples;
 
         // --- Precomputed per-shape constants (slider-rate) ---
@@ -455,54 +483,10 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
         //    prevArrival   — samples until the pending window minimum reaches
         //                    delayedX; <= 0 when nothing is pending.
         // =======================================================================
-        env(prev, prevPhase, prevTotalStep, prevExpected, prevArrival, prevHoldCeil, lookaheadX, delayedX) = result, newPhase, totalStepOut, expected, arrival, holdCeil
+        env(prev, prevPhase, prevTotalStep, prevExpected, lookaheadX, lookaheadBrake, delayedX) = result, newPhase, totalStepOut, expected
             with {
                 prevSpeed = prev-prev';
 
-                // --- Step 0: arrival countdown ---
-                //
-                // A sliding minimum drops on a sample only because the
-                // ENTERING input sample is the window's new minimum (the
-                // window gains one sample and loses one; the min cannot
-                // drop by losing a sample). The entering sample reaches
-                // delayedX after exactly lookaheadSamples. So: on a drop
-                // that lands below the envelope's HEADING, arm the
-                // countdown to lookaheadSamples; it then names the sample
-                // on which the envelope must have fully ducked.
-                //
-                // The heading (v0.8) is where the envelope is going, not
-                // where it is. A live release is heading for its target
-                // — by the incremental-span invariant of Step 3 that is
-                // exactly the pre-drop minimum lookaheadX' — and a later
-                // hold would freeze the span against it, letting the
-                // envelope climb there while the dropped sample is still
-                // in flight toward delayedX. Arming against prev alone
-                // (v0.5–v0.7) missed exactly those: input staircases
-                // whose intermediate levels entered above the envelope
-                // but below where the interrupted release would climb,
-                // arriving at the output tap during the hold, the rise
-                // leg or the early descent — ducked only by the output
-                // clamp, i.e. a corner ("the turnaround is too late").
-                // The max with prev keeps the support floor's deliberate
-                // overshoot (Step 3) covered; when idle or attacking the
-                // heading IS prev and the rule reduces to the old one.
-                // Once a sample is inside the window the heading can
-                // never exceed it (the window minimum is at most that
-                // sample), so every level the envelope could climb above
-                // now carries a deadline; the residue is the rise leg's
-                // curve-mismatch epsilon at the apex and the one-sample
-                // crossing slack.
-                //
-                // Drops while a countdown is pending do not re-arm it. The
-                // first deadline is the binding one; later, deeper minima
-                // ride along as mid-transition retargets and land early
-                // (safe), exactly as in v0.4. Drops that stay above the
-                // heading bind nothing (the envelope will stay below
-                // them) and do not arm.
-                drop = lookaheadX<lookaheadX';
-                armCeiling = max(prev, select2(prevTotalStep>0, prev, lookaheadX'));
-                arm = drop&(lookaheadX<armCeiling)&(prevArrival<=0);
-                arrival = select2(arm, max(prevArrival-1, 0), lookaheadSamples);
 
                 // --- Step 1: direction, gated by the turnaround schedule ---
                 //
@@ -551,58 +535,32 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
                 // completes first, the landing guard refuses to snap across
                 // the dropped target and the state parks at idle until the
                 // gate trips.
-                wantsAttack = (prev>lookaheadX)&(att>0);
-                mirrorBudget = max(arrival-att_samples, 0)*attStep;
-                matchBudget = min(mirrorBudget, attackPeakPhase);
+                attacking = (prev>lookaheadX)&(att>0);
+                releasing = (prev<lookaheadX)&(rel>0);
 
-                // --- v0.10: the apex ceiling ---
-                //
-                // Latched copy of the pre-episode window minimum. While
-                // neither holding nor mid-attack it tracks lookaheadX';
-                // the first sample of a hold or an attack freezes it.
-                // Soundness: any input sample that will reach delayedX
-                // before this episode's landing entered the window
-                // before the episode began (the armed minimum entered
-                // no later than the hold did, and arrivals are FIFO),
-                // so it was inside the window at the freeze and is
-                // therefore at or above this latched minimum. Capping
-                // the rise apex at it (Step 5) protects every
-                // pre-landing arrival — the class the heading-armed
-                // countdown (v0.8) cannot see.
-                //
-                // The latch must be taken at the ARM, pre-drop: every
-                // post-arm entry reaches delayedX only after the armed
-                // deadline, hence after the landing, so only pre-arm
-                // entries bound the apex — and those are all at or
-                // above the pre-drop minimum lookaheadX' of the arm
-                // sample. Latching at the hold instead would read a
-                // target that has already tracked down to the armed
-                // minimum and choke the rise to nothing. The value is
-                // kept while a countdown is pending or an episode is in
-                // flight, tracks lookaheadX' otherwise, and an arm that
-                // fires mid-episode (the unscheduled-flip path) can
-                // only lower it, never raise it over a rise already
-                // bounded by the old latch.
-                inEpisode = held|(prevTotalStep<0);
-                keepOrTrack = select2((prevArrival>0)|inEpisode,
-                    lookaheadX', prevHoldCeil);
-                holdCeil = select2(arm,
-                    keepOrTrack, min(keepOrTrack, lookaheadX'));
-                // v0.10: a hold also ends when the held release —
-                // which may be riding a floor-inflated span past its
-                // pre-drop target — reaches the latched ceiling: above
-                // it the climb would pass levels still in flight, so
-                // the flip fires and the (position-capped) rise absorbs
-                // whatever speed remains. prevHoldCeil, not holdCeil,
-                // to avoid an instantaneous cycle; <= so a hold parked
-                // exactly at the latch keeps its schedule.
-                held = wantsAttack&(prevTotalStep>=0)&(prev<=prevHoldCeil)
-                    &((mirrorBudget>attackPeakPhase)
-                    |(matchBudget*(1-matchBudget)*(prev-lookaheadX)*attackInvCurveScale*attStep
-                        >max(prevSpeed, 0)*(attackShape*(matchBudget-1)*(matchBudget-1)+(1-attackShape))));
-
-                attacking = wantsAttack&(1-held);
-                releasing = ((prev<lookaheadX)|(held&(prevTotalStep>0)))&(rel>0);
+                // THE BRAKE (v0.12, after v0.3.6). A deeper minimum is
+                // visible in the brake horizon a full brake window
+                // before the attack window needs it. While it is —
+                // braking: the envelope at or below the attack target
+                // but above the brake horizon — a linear ramp scales the
+                // release increment to zero over brake_samples, so the
+                // release glides to a standstill before the attack
+                // begins. The attack then enters through ordinary
+                // velocity matching from the measured (braked, ~zero)
+                // speed, and the attack curve's own zero starting
+                // derivative makes the seam C1 — with no scheduling, at
+                // any inherited speed. Braking can only end in an attack
+                // (the deep sample marches from the brake-only region
+                // into the attack window), the multiplier never scales
+                // an attack (braking requires prev <= lookaheadX, and
+                // the *braking inside the ramp's recursion zeroes it on
+                // the attack's first sample), and the envelope never
+                // deliberately sits above a level still in flight — the
+                // late-turnaround corner family of v0.8–v0.10 cannot be
+                // constructed here.
+                braking = (prev>lookaheadBrake)&(prev<=lookaheadX);
+                brakeRamp = ((_+brakeStep):min(1)*braking)~_;
+                brakeMult = 1-brakeRamp;
                 active = attacking|releasing;
 
                 // --- Step 2: Select shape parameters for current direction ---
@@ -670,7 +628,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
                 // envelope decelerates along the curve at the curve's
                 // steepest rate; the deliberate overshoot this allows is
                 // caught by the output clamps in Step 7.
-                incrementalTotalStep = prevTotalStep+(lookaheadX-lookaheadX')*(1-held);
+                incrementalTotalStep = prevTotalStep+(lookaheadX-lookaheadX');
                 entryTotalStep = lookaheadX-prev;
                 supportTotalStep = select2(releasing, 0-abs(prevSpeed), prevSpeed)
                     *select2(releasing, attackSupportRecip, releaseSupportRecip);
@@ -700,7 +658,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
                 sameTarget = (lookaheadX==lookaheadX');
                 sameDirection = (releasing==releasing')&(attacking==attacking');
                 undisturbed = (prev==prevExpected);
-                trusted = (sameTarget|held)&sameDirection&undisturbed&(prevTotalStep!=0);
+                trusted = sameTarget&sameDirection&undisturbed&(prevTotalStep!=0);
 
                 // --- Step 5: velocity matching (for untrusted samples) ---
                 //
@@ -720,24 +678,9 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
                 matchCorr = halfStep*(sameDirection&(prevTotalStep!=0));
                 speedRatio = prevSpeed/(totalStep*invCurveScale*step+(1-active)*1e-30);
 
-                // Shared inverse-derivative inversion (v0.7). The forward
-                // anchors (lateAnchor / forwardPos) and the mirror anchor
-                // (mirrorMatched) are consumed mutually exclusively —
-                // matchedPos selects on `turning` — so the ratio is
-                // direction-folded BEFORE the inversion and one sqrt and
-                // one rational denominator serve both paths. The fold is
-                // a sign flip (exact in float), and the clamp identity
-                // max(0, min(y, M)) == min(max(y, 0), M) for M >= 0 makes
-                // the mirror branch's clamp the same value as v0.6's, so
-                // on each consumed path the result is bit-identical to
-                // evaluating both inversions and discarding one (what
-                // v0.6 did). The fold is a sign flip rather than a
-                // select2 of the two clamped ratios deliberately: it
-                // references speedRatio's subtree ONCE. The argument tree
-                // below is multiplied many times at the box level through
-                // gonnaMakeIt's tail fit, and the two-branch form doubled
-                // the faust compile time of the whole file.
-                matchD = max(0, min(speedRatio*(1-2*turning), maxDerivVal));
+                // Shared inverse-derivative inversion (v0.7): one sqrt
+                // and one rational denominator serve every anchor below.
+                matchD = max(0, min(speedRatio, maxDerivVal));
                 partD = inverseDerivativePart(shape, matchD);
                 denD = 2*(shape*matchD+1);
                 topReleaseD = (1+partD)/denD;
@@ -831,66 +774,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
                         topReleaseD,
                         bottomReleaseD))+matchCorr:max(0):min(1-step);
 
-                // The mirror branch: an attack whose inherited speed still
-                // points UP is a turnaround. The matched anchor is the
-                // negated EARLY-branch inverse — the segment of the attack
-                // curve between phase 0 and the derivative peak, walked
-                // toward the apex with speed decreasing to zero. (In the
-                // inverse-derivative naming, which is inherited from the
-                // release curve through the 1-x mirror, that early attack
-                // branch is inverseDerivativeTOPAttack; BottomAttack is the
-                // late branch that forward matching uses.) The anchor is
-                // floored at the remaining budget so the rise can never
-                // run past the schedule. On the flip sample itself
-                // (direction just changed) the anchor is forced to the grid
-                // depth -matchBudget = -(arrival - att_samples)*attStep:
-                // the gate has just certified that the matched depth
-                // reached it (to within the one-sample crossing slack), and
-                // anchoring on the grid is what makes the landing exact.
-                // (The peak cap is inert at gated flips — the gate cannot
-                // certify beyond the peak — and bounds the degenerate
-                // clamp-disturbance entries.) Mid-rise re-matches
-                // (retargets, clamp disturbances) use the speed-matched
-                // depth, which by then can only be shallower — finishing
-                // the rise early, never late.
-                turning = attacking&(prevSpeed>0);
-                // v0.10: the position budget. matchBudget covers the
-                // SCHEDULE (the rise must fit the countdown); qPos
-                // covers POSITION (the apex must stay at or below the
-                // latched pre-episode minimum holdCeil, which every
-                // pre-landing arrival is at or above). The remaining
-                // climb from anchor depth q is |span|*fd(q), and
-                // fd(q) <= q*maxDerivativeBase*invCurveScale pointwise,
-                // so depth (holdCeil-prev)/(|span|*maxDeriv*scale) is a
-                // conservative cap: cheaper than inverting the curve,
-                // and erring toward a shallower anchor, i.e. toward a
-                // small velocity mismatch instead of a position corner.
-                // A capped rise is shorter than budgeted, so the apex
-                // and the landing only move EARLIER — the schedule's
-                // punctuality is untouched.
-                // v0.11: the denominator is rebuilt from state and
-                // feed-forward signals only, so the division issues at
-                // sample start and its latency hides under the rest of
-                // the recurrence instead of extending it (totalStep
-                // would put it mid-path). At a flip the attack span is
-                // exactly max(entry, |support|) — both state-based —
-                // and a mid-rise incremental span is bounded by
-                // |prevTotalStep| plus the target's one-sample motion,
-                // so spanBound >= |totalStep| wherever the cap is
-                // consumed: qPos only gets (slightly) more conservative
-                // on mid-rise rematches, never looser.
-                spanBound = max(prev-lookaheadX,
-                    max(abs(prevSpeed)*attackSupportRecip,
-                        abs(prevTotalStep)+abs(lookaheadX-lookaheadX')));
-                qPos = max(0, holdCeil-prev)
-                    /max(spanBound*maxDerivVal*invCurveScale, 1e-30);
-                posBudget = min(matchBudget, qPos);
-                mirrorMatched = max(
-                    (0-(1-topReleaseD))+matchCorr,
-                    0-posBudget);
-                mirrorPos = select2(sameDirection, 0-posBudget, mirrorMatched);
-
-                matchedPos = select2(turning, forwardPos, mirrorPos);
+                matchedPos = forwardPos;
 
                 // --- Step 6: advance phase ---
                 //
@@ -900,8 +784,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
                 // The 1-step clamp on the anchor makes the phase reach 1 (to
                 // within rounding) on the final sample of a transition; the
                 // landing test in Step 7 has half a step of slack to absorb
-                // that rounding. Rise-leg anchors are negative and pass the
-                // clamp untouched.
+                // that rounding.
                 anchor = select2(trusted, matchedPos, prevPhase:min(1-step));
                 newPhaseRaw = (anchor+step)*active;
 
@@ -912,67 +795,49 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
                 // quadrature on the cheap rational derivative (see v0.4
                 // note B; the derivative of fdOf is the same expression for
                 // both directions — the attack flip's two sign changes
-                // cancel in the chain rule). derivM extends it to the
-                // rise leg: even position extension means an odd
-                // derivative, signum(p)*fd'(|p|), which is LINEAR through
-                // the apex (fd' ~ x near 0), so an interval straddling 0
-                // integrates cleanly — 2-point GL is exact through cubics.
+                // cancel in the chain rule). v0.12: the brake scales the
+                // increment; braking implies prev <= lookaheadX, so an
+                // attack increment is never braked.
                 glA = 0.21132486540518713;
                 glB = 0.78867513459481287;
                 derivOf(p) = derivativeBaseRelease(shape,
                     select2(releasing, 1-p, p))*invCurveScale;
-                derivM(p) = ma.signum(p)*derivOf(abs(p));
-                delta = totalStep*step*0.5*(derivM(anchor+glA*step)+derivM(anchor+glB*step));
+                delta = totalStep*step*0.5
+                    *(derivOf(anchor+glA*step)+derivOf(anchor+glB*step))
+                    *brakeMult;
 
                 // The value this loop wants to write. Stored as state so the
                 // next sample can detect outside modification (see Step 4).
                 expected = prev+delta;
 
-                // Completion: each LEG of the trajectory ends where its
-                // phase runs out — 1 for a release or an attack, 0 for the
-                // rise leg of a turnaround (risingLeg: the anchor is
-                // negative). Completion fully resets the transition state,
-                // and the halfStep slack absorbs accumulation rounding in
-                // the final phase value (the phase advances in whole
+                // Completion: a transition ends where its phase runs
+                // out; the halfStep slack absorbs accumulation rounding
+                // in the final phase value (the phase advances in whole
                 // steps, so the test is unambiguous).
                 //
-                // The APEX (rise completion) never snaps: the target is
-                // still a full attack away. The state resets, and the next
-                // sample re-enters the attack through velocity matching —
-                // the apex's near-zero speed anchors it at phase ~0 with a
-                // fresh span equal to the true remaining distance, which is
-                // what makes the turnaround's landing position exact with
-                // no curve evaluation. Rise (q/attStep samples) plus
-                // descent (att_samples+1) meets the arrival countdown on
-                // the sample.
-                //
-                // Landing (forward completion): snap to the target — but
-                // only across a residual the snap was designed for
-                // (quadrature epsilon, float epsilon). guardSize is one
-                // peak-speed sample. Under mid-transition retargets the
-                // phase can complete with a real gap left (see v0.4 note
-                // A); snapping across that is a teleport, so instead the
-                // state resets WITHOUT snapping and the next sample starts
-                // a fresh shaped transition over the leftover distance,
-                // entered through velocity matching so it continues from
-                // the current speed. The same refusal is what parks a HELD
-                // release whose target dropped away: residual huge, no
-                // snap, state resets, idle until the gate trips.
+                // Landing: snap to the target — but only across a
+                // residual the snap was designed for (quadrature epsilon,
+                // float epsilon). guardSize is one peak-speed sample.
+                // Under mid-transition retargets the phase can complete
+                // with a real gap left (see v0.4 note A); snapping across
+                // that is a teleport, so instead the state resets WITHOUT
+                // snapping and the next sample starts a fresh shaped
+                // transition over the leftover distance, entered through
+                // velocity matching so it continues from the current
+                // speed.
                 //
                 // The output never goes above the raw (delayed) input and
                 // never below the attack target. The lower clamp is the
                 // required catcher for supportTotalStep's deliberate
                 // overshoot (Step 3); it is inert outside of attack, since
                 // min(prev, lookaheadX) equals prev while releasing or
-                // idle, and during a rise it equals lookaheadX, which the
-                // rising leg is above by construction. It cannot conflict
+                // idle. It cannot conflict
                 // with the upper clamp because lookaheadX <= delayedX by
                 // construction (the sliding-min window contains the
                 // delayed sample).
-                risingLeg = anchor<0;
-                phaseDone = active&(newPhaseRaw>=((1-risingLeg)-halfStep));
+                phaseDone = active&(newPhaseRaw>=(1-halfStep));
                 guardSize = abs(totalStep)*maxDerivVal*invCurveScale*step;
-                landed = phaseDone&(1-risingLeg)&(abs(lookaheadX-expected)<=guardSize);
+                landed = phaseDone&(abs(lookaheadX-expected)<=guardSize);
 
                 result = select2(landed,
                     min(expected, delayedX),
@@ -982,7 +847,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
                 // before; drifting target -> fresh micro-transitions that
                 // follow at curve speed; big jump -> a full new
                 // attack/release; un-snapped residual -> a fresh shaped
-                // transition over the leftover; apex -> the descent.
+                // transition over the leftover.
                 newPhase = newPhaseRaw*(1-phaseDone);
                 totalStepOut = totalStep*(1-phaseDone);
             };
@@ -993,78 +858,58 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
 // ============================================================================
 //
 //  phase:
-//    Progress through the current transition. A release or a plain attack
-//    lives on [0, 1]; the rise leg of a turnaround on [-attackPeakPhase,
-//    0], where the negative phase addresses the time-mirrored attack
-//    curve and 0 is the apex (zero speed). Advances by `step` per sample;
-//    trusted between discontinuities, re-derived from the measured speed
-//    (velocity matching) across them.
+//    Progress through the current transition, on [0, 1]. Advances by
+//    `step` per sample; trusted between discontinuities, re-derived
+//    from the measured speed (velocity matching) across them.
 //
-//  turnaround:
-//    The smooth reversal performed when an attack interrupts a release:
-//    two legs with an apex handoff. The RISE leg runs on the attack curve
-//    extended to negative phase by even reflection of the fraction-done
-//    function (same positions, mirrored velocities): the envelope rises,
-//    decelerating to a standstill at phase 0. Reaching the apex is a leg
-//    completion (reset, never a snap); the DESCENT re-enters as an
-//    ordinary attack via velocity matching, with a fresh span equal to
-//    the true remaining distance — which is what makes the landing
-//    position exact. The budget is fixed at one full extra attack of
-//    lookahead (since v0.7; a slider used to scale it), enough for any
-//    matched depth at any shape.
+//  braking (v0.12):
+//    A deeper minimum is visible in the brake horizon but not yet in
+//    the attack window. While it is, the release increment is scaled
+//    by 1-brakeRamp — a linear ramp reaching 1 in brake_samples — so
+//    the release glides to a standstill and the attack always enters
+//    from ~zero speed through velocity matching.
 //
-//  arrival:
-//    Countdown (samples) until the pending window minimum reaches
-//    delayedX. Armed to lookaheadSamples when lookaheadX drops below
-//    the envelope's heading — the live release's target, else the
-//    envelope itself (v0.8, Step 0) — while nothing is pending; the
-//    first deadline binds, later drops ride along as retargets.
+//  turnaround (v0.5–v0.11, retired):
+//    The mirrored-curve reversal scheduled by an arrival countdown.
+//    Replaced by the brake; see the v0.12 paragraph at the top.
 //
-//  holdCeil:
-//    The window minimum latched on the last sample before the current
-//    hold/attack episode began (v0.10). Every sample arriving before
-//    the episode's landing is at or above it; the rise apex is capped
-//    at it through the position budget in Step 5.
+//  arrival (v0.5–v0.11, retired):
+//    The countdown that scheduled the turnaround's just-in-time flip.
+//    Gone with it: attacks start the moment the attack window binds.
 //
-//  held:
-//    Wanting to attack while there is still time not to. The flip waits
-//    until the schedule budget (arrival - att_samples)*attStep has shrunk
-//    to the depth the current speed velocity-matches — tested on the
-//    derivative axis, derivative(budget)*|span| > speed, which is
-//    monotone-equivalent to inverting the derivative but costs one
-//    rational evaluation. Meanwhile the in-flight release continues on a
-//    frozen span, or the envelope idles. Strictly an entry gate: it can
-//    only fire while prevTotalStep >= 0 — an attack already in flight is
-//    committed and never re-gated.
+//  holdCeil (v0.10–v0.11, retired):
+//    The latched pre-episode minimum that capped the rise apex. The
+//    brake never lifts the envelope above anything in flight.
+//
+//  held (v0.5–v0.11, retired):
+//    The just-in-time entry gate that delayed wanted attacks while
+//    schedule budget remained. Attacks are no longer gated.
 //
 //  totalStep:
 //    The full amplitude span (in linear gain) of the current transition
 //    leg. Maintained incrementally: held exactly while the target is
-//    static (and during a HOLD), moved by exactly (lookaheadX -
-//    lookaheadX') when it isn't, recomputed on entry as (lookaheadX -
-//    prev) — the rise leg too: its position needs no exactness because
-//    the descent re-spans at the apex — and never allowed to shrink past
-//    the span whose curve can still carry the current speed
-//    (supportTotalStep, two-sided on the attack).
+//    static, moved by exactly (lookaheadX - lookaheadX') when it
+//    isn't, recomputed on entry as (lookaheadX - prev), and never
+//    allowed to shrink past the span whose curve can still carry the
+//    current speed (supportTotalStep, two-sided on the attack).
 //
 //  step:
 //    Phase increment per sample = 1 / (duration_in_samples).
 //
 //  fdOf(p):
 //    Fraction of the transition completed at phase p, for both directions.
-//    Position on the curve = transitionStart + totalStep*fdOf(p); for
-//    rise-leg phases, fdOf(|p|). The per-sample delta integrates
-//    signum(p)*fdOf'(|p|) over one step with 2-point Gauss-Legendre
-//    quadrature; the ~1e-10 per-transition residual is absorbed by the
-//    landing snap.
+//    Position on the curve = transitionStart + totalStep*fdOf(p). The
+//    per-sample delta integrates fdOf' over one step with 2-point
+//    Gauss-Legendre quadrature; the ~1e-10 per-transition residual is
+//    absorbed by the landing snap.
 //
 //  velocity matching:
 //    Across a discontinuity (retarget, direction flip, outside
 //    modification), find the phase on the (possibly new) curve whose
 //    derivative equals the envelope's current speed, then continue from
-//    there. A speed whose sign opposes the span maps to the mirror: minus
-//    the early-branch inverse (TopAttack — the naming mirrors the release
-//    curve), floored at the remaining budget. With exact increments the
+//    there. A speed whose sign opposes the span clamps to the
+//    zero-derivative anchor — the leg's start; e.g. an attack entered
+//    from a braked, still-creeping release. With exact increments the
 //    measured speed is a mean over the last step, hence the halfStep
 //    matchCorr.
 //
@@ -1075,8 +920,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
 //    that reaches (overshoot is clampable; stranding short is late). By
 //    default the projection evaluates slider-rate-fitted tail cubics;
 //    exactBranchPick = 1 evaluates the true curve (the log+atan pair)
-//    every sample instead. (Forward matching only; the rise leg always
-//    decelerates into the apex.)
+//    every sample instead.
 //
 //  landing:
 //    When a leg's phase completes, the transition state is fully reset.
@@ -1084,16 +928,17 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
 //    one peak-speed sample (quadrature/float epsilon territory); larger
 //    residuals are NOT snapped (teleport) — the leftover gets a fresh
 //    shaped transition that velocity-matches into the current speed. The
-//    rise leg NEVER snaps: its completion is the apex, and the descent
-//    takes over. The phase-completion test carries halfStep of slack
-//    because the final phase value is produced by accumulation and can
-//    round off-grid. A turnaround flipped on the grid lands on the exact
-//    sample the arrival countdown reaches zero — the sample delayedX
-//    presents the transient.
+//    phase-completion test carries halfStep of slack because the final
+//    phase value is produced by accumulation and can round off-grid. An
+//    attack starts the sample the attack window binds and takes
+//    att_samples+1 — landing exactly when delayedX presents the
+//    transient.
 //
 //  lookaheadX:
-//    The sliding minimum of the input over the next lookaheadSamples
-//    (= att_samples + turnaround budget): the envelope's target.
+//    The sliding minimum of the input over the next att_samples (the
+//    attack window): the envelope's target. lookaheadBrake extends the
+//    same minimum over the full lookahead (att_samples +
+//    brake_samples): the brake's early warning.
 //
 //  AUC compensation:
 //    (Omitted from this core file for clarity.) Adjusts the attack/release
