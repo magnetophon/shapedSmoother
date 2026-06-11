@@ -1,16 +1,17 @@
 declare name "shapedSmoother_core";
-declare version "0.9";
+declare version "0.10";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // ============================================================================
-//  shapedSmoother — core algorithm, v0.9
+//  shapedSmoother — core algorithm, v0.10
 //
 //  CHANGES vs v0.4: THE TURNAROUND (v0.5), RESTRUCTURED FOR CPU (v0.6),
 //  TURNAROUND FIXED AT 1 + SHARED INVERSION + SUPPORT RECIPROCAL (v0.7),
 //  HEADING-ARMED COUNTDOWN — STAIRCASE-PROOF SCHEDULING (v0.8),
-//  RELEASE BRANCH PICK — NO MORE PHANTOM-SPAN LUNGES (v0.9).
+//  RELEASE BRANCH PICK — NO MORE PHANTOM-SPAN LUNGES (v0.9),
+//  APEX CAPPED AT THE PRE-EPISODE MINIMUM (v0.10).
 //
 //  An attack arriving while a release was still in flight hit the
 //  clampedRatio floor: the opposite-sign speed matched to phase 0, the
@@ -53,7 +54,7 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  INHERITED SPEED alone and can still overshoot levels in flight
 //  (capping it at the frozen heading would close that class too, at
 //  the price of a bounded velocity mismatch and one more state word;
-//  designed, not yet landed). Measured on 60 s of noisy staircases
+//  landed in v0.10). Measured on 60 s of noisy staircases
 //  (noise 0.152, blockscale 8.21, att 4.5 ms, rel 14.4 ms,
 //  shapes 0.5/0): clamp corners at transient arrivals 106 -> 28,
 //  corners deeper than 0.01 of full scale 81 -> 15, worst corner
@@ -75,6 +76,25 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  average envelope sits ~0.02 lower because the lunge had been an
 //  illegitimately fast release. What remains is the speed-placed
 //  apex class described above.
+//
+//  v0.10 lands the cap. One new recursion word latches the window
+//  minimum from the last sample before a hold or attack episode
+//  begins; every input sample arriving before the episode's landing
+//  was inside the window at that freeze, so it sits at or above the
+//  latch, and a rise apex capped there can no longer overshoot
+//  anything still in flight. The cap bounds the anchor depth using
+//  fd(q) <= q*maxDerivativeBase*invCurveScale — conservative, so the
+//  trade is always a small velocity mismatch, never a position
+//  corner — and a capped rise only lands earlier, leaving the
+//  schedule's punctuality untouched. The hold itself also ends when
+//  the held release — possibly riding a floor-inflated span past its
+//  pre-drop target — reaches the same latch, so the climb can never
+//  pass a level still in flight either. Measured on the 60 s noisy
+//  staircases at both panels (att 4.51 ms, shapes 0.5/0; and att
+//  7.41 ms, shapes 0.341/0.5): corners deeper than 0.01 of full
+//  scale: ZERO, at both — every residual is the one-sample crossing
+//  slack — with rise counts and average attenuation within 1% of
+//  v0.9.
 //
 //  1. MIRRORED ATTACK CURVE / NEGATIVE PHASE. The attack's fraction-done
 //     function is extended to negative phase by even reflection,
@@ -182,7 +202,8 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  across repeated runs, at the defaults and at att = 2 ms /
 //  shapes = 0.9 alike. v0.8's arming change costs one max and one
 //  select2 per sample and no state (corner statistics in the v0.8
-//  paragraph above). Nearly all of the v0.7
+//  paragraph above); v0.10 adds one recursion word and one division
+//  on the mirror path (the position budget, Step 5). Nearly all of the v0.7
 //  speedup is the support-floor reciprocal (Step 3); the shared
 //  inversion is
 //  time-neutral on a wide core (the discarded twin ran in parallel on
@@ -332,7 +353,7 @@ lookaheadSamples = min(int(att_samples)+extraSamples, int(maxLookaheadSamples));
 
 process = testSignal<:(_@lookaheadSamples, shapedSmoother(_));
 
-shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
+shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, !)
     with {
         lookaheadX = x:ba.slidingMin(lookaheadSamples+1, 1+maxLookaheadSamples);
         delayedX = x@lookaheadSamples;
@@ -430,7 +451,7 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
         //    prevArrival   — samples until the pending window minimum reaches
         //                    delayedX; <= 0 when nothing is pending.
         // =======================================================================
-        env(prev, prevPhase, prevTotalStep, prevExpected, prevArrival, lookaheadX, delayedX) = result, newPhase, totalStepOut, expected, arrival
+        env(prev, prevPhase, prevTotalStep, prevExpected, prevArrival, prevHoldCeil, lookaheadX, delayedX) = result, newPhase, totalStepOut, expected, arrival, holdCeil
             with {
                 prevSpeed = prev-prev';
 
@@ -529,7 +550,49 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                 wantsAttack = (prev>lookaheadX)&(att>0);
                 mirrorBudget = max(arrival-att_samples, 0)*attStep;
                 matchBudget = min(mirrorBudget, attackPeakPhase);
-                held = wantsAttack&(prevTotalStep>=0)
+
+                // --- v0.10: the apex ceiling ---
+                //
+                // Latched copy of the pre-episode window minimum. While
+                // neither holding nor mid-attack it tracks lookaheadX';
+                // the first sample of a hold or an attack freezes it.
+                // Soundness: any input sample that will reach delayedX
+                // before this episode's landing entered the window
+                // before the episode began (the armed minimum entered
+                // no later than the hold did, and arrivals are FIFO),
+                // so it was inside the window at the freeze and is
+                // therefore at or above this latched minimum. Capping
+                // the rise apex at it (Step 5) protects every
+                // pre-landing arrival — the class the heading-armed
+                // countdown (v0.8) cannot see.
+                //
+                // The latch must be taken at the ARM, pre-drop: every
+                // post-arm entry reaches delayedX only after the armed
+                // deadline, hence after the landing, so only pre-arm
+                // entries bound the apex — and those are all at or
+                // above the pre-drop minimum lookaheadX' of the arm
+                // sample. Latching at the hold instead would read a
+                // target that has already tracked down to the armed
+                // minimum and choke the rise to nothing. The value is
+                // kept while a countdown is pending or an episode is in
+                // flight, tracks lookaheadX' otherwise, and an arm that
+                // fires mid-episode (the unscheduled-flip path) can
+                // only lower it, never raise it over a rise already
+                // bounded by the old latch.
+                inEpisode = held|(prevTotalStep<0);
+                keepOrTrack = select2((prevArrival>0)|inEpisode,
+                    lookaheadX', prevHoldCeil);
+                holdCeil = select2(arm,
+                    keepOrTrack, min(keepOrTrack, lookaheadX'));
+                // v0.10: a hold also ends when the held release —
+                // which may be riding a floor-inflated span past its
+                // pre-drop target — reaches the latched ceiling: above
+                // it the climb would pass levels still in flight, so
+                // the flip fires and the (position-capped) rise absorbs
+                // whatever speed remains. prevHoldCeil, not holdCeil,
+                // to avoid an instantaneous cycle; <= so a hold parked
+                // exactly at the latch keeps its schedule.
+                held = wantsAttack&(prevTotalStep>=0)&(prev<=prevHoldCeil)
                     &((mirrorBudget>attackPeakPhase)
                     |(matchBudget*(1-matchBudget)*(prev-lookaheadX)*attackInvCurveScale*attStep
                         >max(prevSpeed, 0)*(attackShape*(matchBudget-1)*(matchBudget-1)+(1-attackShape))));
@@ -787,10 +850,27 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                 // depth, which by then can only be shallower — finishing
                 // the rise early, never late.
                 turning = attacking&(prevSpeed>0);
+                // v0.10: the position budget. matchBudget covers the
+                // SCHEDULE (the rise must fit the countdown); qPos
+                // covers POSITION (the apex must stay at or below the
+                // latched pre-episode minimum holdCeil, which every
+                // pre-landing arrival is at or above). The remaining
+                // climb from anchor depth q is |span|*fd(q), and
+                // fd(q) <= q*maxDerivativeBase*invCurveScale pointwise,
+                // so depth (holdCeil-prev)/(|span|*maxDeriv*scale) is a
+                // conservative cap: cheaper than inverting the curve,
+                // and erring toward a shallower anchor, i.e. toward a
+                // small velocity mismatch instead of a position corner.
+                // A capped rise is shorter than budgeted, so the apex
+                // and the landing only move EARLIER — the schedule's
+                // punctuality is untouched.
+                qPos = max(0, holdCeil-prev)
+                    /max(abs(totalStep)*maxDerivVal*invCurveScale, 1e-30);
+                posBudget = min(matchBudget, qPos);
                 mirrorMatched = max(
                     (0-(1-topReleaseD))+matchCorr,
-                    0-matchBudget);
-                mirrorPos = select2(sameDirection, 0-matchBudget, mirrorMatched);
+                    0-posBudget);
+                mirrorPos = select2(sameDirection, 0-posBudget, mirrorMatched);
 
                 matchedPos = select2(turning, forwardPos, mirrorPos);
 
@@ -921,6 +1001,12 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
 //    the envelope's heading — the live release's target, else the
 //    envelope itself (v0.8, Step 0) — while nothing is pending; the
 //    first deadline binds, later drops ride along as retargets.
+//
+//  holdCeil:
+//    The window minimum latched on the last sample before the current
+//    hold/attack episode began (v0.10). Every sample arriving before
+//    the episode's landing is at or above it; the rise apex is capped
+//    at it through the position budget in Step 5.
 //
 //  held:
 //    Wanting to attack while there is still time not to. The flip waits
