@@ -1,17 +1,18 @@
 declare name "shapedSmoother_core";
-declare version "0.10";
+declare version "0.11";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // ============================================================================
-//  shapedSmoother — core algorithm, v0.10
+//  shapedSmoother — core algorithm, v0.11
 //
 //  CHANGES vs v0.4: THE TURNAROUND (v0.5), RESTRUCTURED FOR CPU (v0.6),
 //  TURNAROUND FIXED AT 1 + SHARED INVERSION + SUPPORT RECIPROCAL (v0.7),
 //  HEADING-ARMED COUNTDOWN — STAIRCASE-PROOF SCHEDULING (v0.8),
 //  RELEASE BRANCH PICK — NO MORE PHANTOM-SPAN LUNGES (v0.9),
-//  APEX CAPPED AT THE PRE-EPISODE MINIMUM (v0.10).
+//  APEX CAPPED AT THE PRE-EPISODE MINIMUM (v0.10),
+//  POSITION-BUDGET DIVISION OFF THE RECURRENCE PATH (v0.11).
 //
 //  An attack arriving while a release was still in flight hit the
 //  clampedRatio floor: the opposite-sign speed matched to phase 0, the
@@ -203,7 +204,10 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  shapes = 0.9 alike. v0.8's arming change costs one max and one
 //  select2 per sample and no state (corner statistics in the v0.8
 //  paragraph above); v0.10 adds one recursion word and one division
-//  on the mirror path (the position budget, Step 5). Nearly all of the v0.7
+//  on the mirror path (the position budget, Step 5), and v0.11 feeds
+//  that division from state and feed-forward signals only, so it
+//  issues at sample start and overlaps the recurrence instead of
+//  lengthening it — on narrow cores the difference is real. Nearly all of the v0.7
 //  speedup is the support-floor reciprocal (Step 3); the shared
 //  inversion is
 //  time-neutral on a wide core (the discarded twin ran in parallel on
@@ -864,8 +868,22 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _, _):(_, _, _, !, !, 
                 // A capped rise is shorter than budgeted, so the apex
                 // and the landing only move EARLIER — the schedule's
                 // punctuality is untouched.
+                // v0.11: the denominator is rebuilt from state and
+                // feed-forward signals only, so the division issues at
+                // sample start and its latency hides under the rest of
+                // the recurrence instead of extending it (totalStep
+                // would put it mid-path). At a flip the attack span is
+                // exactly max(entry, |support|) — both state-based —
+                // and a mid-rise incremental span is bounded by
+                // |prevTotalStep| plus the target's one-sample motion,
+                // so spanBound >= |totalStep| wherever the cap is
+                // consumed: qPos only gets (slightly) more conservative
+                // on mid-rise rematches, never looser.
+                spanBound = max(prev-lookaheadX,
+                    max(abs(prevSpeed)*attackSupportRecip,
+                        abs(prevTotalStep)+abs(lookaheadX-lookaheadX')));
                 qPos = max(0, holdCeil-prev)
-                    /max(abs(totalStep)*maxDerivVal*invCurveScale, 1e-30);
+                    /max(spanBound*maxDerivVal*invCurveScale, 1e-30);
                 posBudget = min(matchBudget, qPos);
                 mirrorMatched = max(
                     (0-(1-topReleaseD))+matchCorr,
