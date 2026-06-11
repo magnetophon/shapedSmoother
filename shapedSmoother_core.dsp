@@ -1,11 +1,11 @@
 declare name "shapedSmoother_core";
-declare version "0.12";
+declare version "0.13";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // ============================================================================
-//  shapedSmoother — core algorithm, v0.12
+//  shapedSmoother — core algorithm, v0.13
 //
 //  CHANGES vs v0.4: THE TURNAROUND (v0.5), RESTRUCTURED FOR CPU (v0.6),
 //  TURNAROUND FIXED AT 1 + SHARED INVERSION + SUPPORT RECIPROCAL (v0.7),
@@ -13,7 +13,8 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  RELEASE BRANCH PICK — NO MORE PHANTOM-SPAN LUNGES (v0.9),
 //  APEX CAPPED AT THE PRE-EPISODE MINIMUM (v0.10),
 //  POSITION-BUDGET DIVISION OFF THE RECURRENCE PATH (v0.11),
-//  TURNAROUND RETIRED — THE BRAKE (v0.12).
+//  TURNAROUND RETIRED — THE BRAKE (v0.12),
+//  BRAKE RE-CLOCKED OFF THE FUTURE TARGET (v0.13).
 //
 //  v0.12 retires the turnaround. Its guarantee had narrowed with every
 //  correctness fix (over-capacity speeds and ceiling-bound rises both
@@ -38,6 +39,32 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  25 s); CPU 0.81x of v0.11 under -double -mcd 0 -Ofast. Paragraphs
 //  below this one describe the retired versions and are kept as
 //  history.
+//
+//  v0.13 re-clocks the brake. v0.12 started the ramp when the
+//  envelope lifted above the brake horizon, so a release born shortly
+//  before a bind could reach the flip with the ramp only partially
+//  built and carry up to a third of peak speed into it — a visible
+//  slope corner. The ramp is now clocked by the gap between the
+//  FUTURE attack target (the same sliding minimum read one brake
+//  window earlier in its pipeline, costing nothing) and the present
+//  one. That gap opens exactly brake_samples before every bind and
+//  closes at it, so the ramp saturates exactly when the attack window
+//  binds, for every release however young. Consequence: a release
+//  born with the gap already open starts already-braked, so
+//  recoveries shorter than the brake window are suppressed instead of
+//  blipped — the policy a release hold applies. The second
+//  sliding-minimum tree is gone (the gap needs no separate horizon
+//  minimum). Measured: the scope's release-into-bind corner (36% of
+//  peak speed at the flip) is eliminated for standstill births and
+//  for fresh deeper minima, whose ramp timing is exact; equal-depth
+//  successions caught mid-flight stay partially braked — worst flip
+//  18% of peak on the staircase loop, half of v0.12 — since exact
+//  timing there needs per-minimum age, the countdown machinery this
+//  design retired. Both noise panels: zero deep corners. Average
+//  envelope on dense noisy material pays for the always-armed brake:
+//  -0.342/-0.287 vs v0.12's -0.230/-0.224 — sub-brake recoveries are
+//  suppressed by design (a release hold does the same). CPU 83.4 ns
+//  per sample (1.08x of v0.12, generic -double -mcd 0 -Ofast).
 //
 //  An attack arriving while a release was still in flight hit the
 //  clampedRatio floor: the opposite-sign speed matched to phase 0, the
@@ -378,16 +405,30 @@ lookaheadSamples = min(int(att_samples)+brake_samples, int(maxLookaheadSamples))
 
 process = testSignal<:(_@lookaheadSamples, shapedSmoother(_));
 
-shapedSmoother(x) = lookaheadX, lookaheadBrake, delayedX:env~(_, _, _, _):(_, _, _, !)
+shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _, _, !)
     with {
-        // Attack window: the minimum over the next att_samples of the
-        // delayed signal — the sliding minimum of the raw input over
-        // att_samples+1, re-aligned by the brake delay.
-        lookaheadX = x:ba.slidingMin(int(att_samples)+1, 1+maxLookaheadSamples)@brake_samples;
-        // Brake horizon: the minimum over the full lookahead. A strict
-        // superset of the attack window, so lookaheadBrake <= lookaheadX
-        // always; the gap between the two is the brake's early warning.
-        lookaheadBrake = x:ba.slidingMin(lookaheadSamples+1, 1+maxLookaheadSamples);
+        // Future attack window: the att_samples+1 sliding minimum, not
+        // yet delayed — it equals lookaheadX brake_samples in the
+        // future, for free. A sample entering it hands off to
+        // lookaheadX exactly brake_samples later (brake_samples =
+        // att_samples+1 = the window length, so the two windows tile
+        // the lookahead without a gap; a differently sized brake would
+        // need the brake-only band's own minimum here instead).
+        attackMinAhead = x:ba.slidingMin(int(att_samples)+1, 1+maxLookaheadSamples);
+        lookaheadX = attackMinAhead@brake_samples;
+        // THE BRAKE CLOCK (v0.13). braking is true exactly while the
+        // future target is below the present one — from the moment a
+        // deeper minimum becomes visible until the moment the attack
+        // window binds on it, a span of exactly brake_samples — so the
+        // ramp saturates exactly at every bind and any release in
+        // flight is at a standstill when its attack begins, however
+        // recently the release was born. A release born with the gap
+        // already open starts already-braked: recoveries shorter than
+        // the brake window are suppressed instead of blipped, the same
+        // policy a release hold applies. (v0.12 clocked the ramp from
+        // the envelope's own liftoff, which could leave it only
+        // partially built at the bind — a release could carry a third
+        // of peak speed into the flip.)
         delayedX = x@lookaheadSamples;
 
         // --- Precomputed per-shape constants (slider-rate) ---
@@ -483,7 +524,7 @@ shapedSmoother(x) = lookaheadX, lookaheadBrake, delayedX:env~(_, _, _, _):(_, _,
         //    prevArrival   — samples until the pending window minimum reaches
         //                    delayedX; <= 0 when nothing is pending.
         // =======================================================================
-        env(prev, prevPhase, prevTotalStep, prevExpected, lookaheadX, lookaheadBrake, delayedX) = result, newPhase, totalStepOut, expected
+        env(prev, prevPhase, prevTotalStep, prevExpected, lookaheadX, attackMinAhead, delayedX) = result, newPhase, totalStepOut, expected
             with {
                 prevSpeed = prev-prev';
 
@@ -536,31 +577,52 @@ shapedSmoother(x) = lookaheadX, lookaheadBrake, delayedX:env~(_, _, _, _):(_, _,
                 // the dropped target and the state parks at idle until the
                 // gate trips.
                 attacking = (prev>lookaheadX)&(att>0);
-                releasing = (prev<lookaheadX)&(rel>0);
 
-                // THE BRAKE (v0.12, after v0.3.6). A deeper minimum is
-                // visible in the brake horizon a full brake window
-                // before the attack window needs it. While it is —
-                // braking: the envelope at or below the attack target
-                // but above the brake horizon — a linear ramp scales the
-                // release increment to zero over brake_samples, so the
-                // release glides to a standstill before the attack
-                // begins. The attack then enters through ordinary
-                // velocity matching from the measured (braked, ~zero)
-                // speed, and the attack curve's own zero starting
-                // derivative makes the seam C1 — with no scheduling, at
-                // any inherited speed. Braking can only end in an attack
-                // (the deep sample marches from the brake-only region
-                // into the attack window), the multiplier never scales
-                // an attack (braking requires prev <= lookaheadX, and
-                // the *braking inside the ramp's recursion zeroes it on
-                // the attack's first sample), and the envelope never
-                // deliberately sits above a level still in flight — the
-                // late-turnaround corner family of v0.8–v0.10 cannot be
-                // constructed here.
-                braking = (prev>lookaheadBrake)&(prev<=lookaheadX);
+                // The clock: a deeper-or-equal minimum is in the
+                // brake-only region exactly when the future target sits
+                // below the present one, and it binds exactly
+                // brake_samples after appearing there.
+                braking = attackMinAhead<lookaheadX;
+
+                // BIRTH HOLD (v0.13). The gap can also open by the
+                // TARGET rising (a recovery window shorter than the
+                // brake: the coming minimum equals the floor the
+                // envelope already sits on, so attackMinAhead never
+                // dropped). The bind is then less than a brake away and
+                // no time ramp can saturate for it — so a release that
+                // would be BORN into that situation simply isn't: a
+                // true standstill (prevTotalStep == 0, exact — the
+                // completion reset writes literal zero) stays parked
+                // while a duck to at-or-below the current level is
+                // pending. Velocity 0 -> 0: no kink is possible.
+                // Recoveries shorter than the brake window are
+                // suppressed, the policy a release hold applies.
+                // Anything already in flight is untouched — the gradual
+                // ramp below covers it, and a multiplier step at a
+                // retarget is absorbed by velocity matching, which
+                // re-anchors at the measured speed.
+                freshHold = braking&(attackMinAhead<=prev)&(prevTotalStep==0);
+                releasing = (prev<lookaheadX)&(rel>0)&(1-freshHold);
+
+                // THE BRAKE (v0.12; re-clocked in v0.13: braking, the
+                // clock, is computed at shapedSmoother level by
+                // comparing the future target to the present one). The
+                // ramp must integrate HERE, where braking arrives as a
+                // plain input: written at shapedSmoother level, the
+                // recursion's feedback binds to the wrong free input —
+                // braking's definition pulls x in as a free variable,
+                // the ~ closes over that, and the multiplier silently
+                // leaves [0, 1]. The multiplier scales RELEASE
+                // increments only: releasing is 0/1, so during an
+                // attack it is exactly 1 even while the ramp stays
+                // saturated for a further pending minimum — an attack
+                // is never slowed. At every bind the ramp has just
+                // saturated, so the release it scaled is already at a
+                // standstill: the attack enters from ~zero speed
+                // through velocity matching and the seam is C1 at any
+                // inherited speed.
                 brakeRamp = ((_+brakeStep):min(1)*braking)~_;
-                brakeMult = 1-brakeRamp;
+                brakeMult = 1-brakeRamp*releasing;
                 active = attacking|releasing;
 
                 // --- Step 2: Select shape parameters for current direction ---
@@ -862,12 +924,14 @@ shapedSmoother(x) = lookaheadX, lookaheadBrake, delayedX:env~(_, _, _, _):(_, _,
 //    `step` per sample; trusted between discontinuities, re-derived
 //    from the measured speed (velocity matching) across them.
 //
-//  braking (v0.12):
-//    A deeper minimum is visible in the brake horizon but not yet in
-//    the attack window. While it is, the release increment is scaled
-//    by 1-brakeRamp — a linear ramp reaching 1 in brake_samples — so
-//    the release glides to a standstill and the attack always enters
-//    from ~zero speed through velocity matching.
+//  braking (v0.12, re-clocked v0.13):
+//    The future attack target (attackMinAhead = lookaheadX read
+//    brake_samples ahead) is below the present one; a bind is exactly
+//    brake_samples away when this turns true. The release increment is
+//    scaled by 1-brakeRamp, a linear ramp that saturates exactly at
+//    the bind, so every attack enters from a standstill. Releases born
+//    inside an open gap start already-braked: recoveries shorter than
+//    the brake window are suppressed, release-hold style.
 //
 //  turnaround (v0.5–v0.11, retired):
 //    The mirrored-curve reversal scheduled by an arrival countdown.
@@ -936,9 +1000,9 @@ shapedSmoother(x) = lookaheadX, lookaheadBrake, delayedX:env~(_, _, _, _):(_, _,
 //
 //  lookaheadX:
 //    The sliding minimum of the input over the next att_samples (the
-//    attack window): the envelope's target. lookaheadBrake extends the
-//    same minimum over the full lookahead (att_samples +
-//    brake_samples): the brake's early warning.
+//    attack window): the envelope's target. attackMinAhead is the
+//    same minimum one brake window earlier in its pipeline — the
+//    future target — and the brake clock compares the two.
 //
 //  AUC compensation:
 //    (Omitted from this core file for clarity.) Adjusts the attack/release
