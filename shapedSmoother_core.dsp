@@ -1,15 +1,16 @@
 declare name "shapedSmoother_core";
-declare version "0.8";
+declare version "0.9";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // ============================================================================
-//  shapedSmoother — core algorithm, v0.8
+//  shapedSmoother — core algorithm, v0.9
 //
 //  CHANGES vs v0.4: THE TURNAROUND (v0.5), RESTRUCTURED FOR CPU (v0.6),
 //  TURNAROUND FIXED AT 1 + SHARED INVERSION + SUPPORT RECIPROCAL (v0.7),
-//  HEADING-ARMED COUNTDOWN — STAIRCASE-PROOF SCHEDULING (v0.8).
+//  HEADING-ARMED COUNTDOWN — STAIRCASE-PROOF SCHEDULING (v0.8),
+//  RELEASE BRANCH PICK — NO MORE PHANTOM-SPAN LUNGES (v0.9).
 //
 //  An attack arriving while a release was still in flight hit the
 //  clampedRatio floor: the opposite-sign speed matched to phase 0, the
@@ -58,6 +59,22 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  corners deeper than 0.01 of full scale 81 -> 15, worst corner
 //  duration 8 -> 2 samples; cost 0.011 of extra average attenuation
 //  and 1.9% more fully-ducked time.
+//
+//  v0.9 removes the worst of what remained. Velocity matching's
+//  branch pick preferred the anchor that REACHES the target in both
+//  directions; on the release side, after an upward retarget near
+//  completion, that pick re-anchors a grown span at its start and
+//  lunges past the target by the already-traversed distance, riding
+//  the input clamp and parking far above every level still in flight
+//  — the setup for the deepest late-turnaround corners. The release
+//  now reaches only when the decelerating anchor's strand exceeds the
+//  accelerating anchor's overshoot (see Step 5); the rule is
+//  unchanged at fresh entries. Measured on the same 60 s of noisy
+//  staircases, att 7.41 ms / shapes 0.341 / 0.5: worst corner depth
+//  0.466 -> 0.167, corners 38 -> 24, all residuals one sample; the
+//  average envelope sits ~0.02 lower because the lunge had been an
+//  illegitimately fast release. What remains is the speed-placed
+//  apex class described above.
 //
 //  1. MIRRORED ATTACK CURVE / NEGATIVE PHASE. The attack's fraction-done
 //     function is extended to negative phase by even reflection,
@@ -714,15 +731,38 @@ shapedSmoother(x) = lookaheadX, delayedX:env~(_, _, _, _, _):(_, _, _, !, !)
                     projectedFast>lookaheadX,
                     projected>lookaheadX);
 
+                // v0.9: the reach-preference is attack-only. Its
+                // rationale — stranding short arrives LATE, and late is
+                // what the attack's lookahead contract cannot absorb —
+                // does not transfer to the release, which has no
+                // deadline: there, stranding just hands the leftover to
+                // a fresh micro-release (the documented drifting-target
+                // behavior), while REACHING from the accelerating
+                // anchor traverses the whole span. After an upward
+                // retarget near completion the span has grown but the
+                // remaining distance has not, so the accelerating pick
+                // lunges past the target by (span - remaining) — the
+                // already-traversed distance — rides the input clamp,
+                // and parks far above every level still in flight: the
+                // deep "turnaround too late" corners. The release now
+                // picks the accelerating anchor only when the
+                // decelerating anchor's strand exceeds that overshoot.
+                // overshootBottom = prev + totalStep - lookaheadX is the
+                // traversed distance (>= 0), zero at a fresh entry — so
+                // the rule reduces exactly to the old one where the old
+                // one was right, and flips exactly on late-phase upward
+                // retargets, where it was not.
+                strandTop = lookaheadX-select2(exactBranchPick, projectedFast, projected);
+                overshootBottom = prev+totalStep-lookaheadX;
                 forwardPos = select2(releasing,
                     // Attack branch
                     select2(gonnaMakeIt,
                         1-bottomReleaseD,
                         1-topReleaseD),
                     // Release branch
-                    select2(gonnaMakeIt,
-                        bottomReleaseD,
-                        topReleaseD))+matchCorr:max(0):min(1-step);
+                    select2(strandTop>overshootBottom,
+                        topReleaseD,
+                        bottomReleaseD))+matchCorr:max(0):min(1-step);
 
                 // The mirror branch: an attack whose inherited speed still
                 // points UP is a turnaround. The matched anchor is the
