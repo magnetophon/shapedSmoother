@@ -1,11 +1,11 @@
 declare name "shapedSmoother_core";
-declare version "0.13";
+declare version "0.14";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // ============================================================================
-//  shapedSmoother — core algorithm, v0.13
+//  shapedSmoother — core algorithm, v0.14
 //
 //  CHANGES vs v0.4: THE TURNAROUND (v0.5), RESTRUCTURED FOR CPU (v0.6),
 //  TURNAROUND FIXED AT 1 + SHARED INVERSION + SUPPORT RECIPROCAL (v0.7),
@@ -14,7 +14,8 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  APEX CAPPED AT THE PRE-EPISODE MINIMUM (v0.10),
 //  POSITION-BUDGET DIVISION OFF THE RECURRENCE PATH (v0.11),
 //  TURNAROUND RETIRED — THE BRAKE (v0.12),
-//  BRAKE RE-CLOCKED OFF THE FUTURE TARGET (v0.13).
+//  BRAKE RE-CLOCKED OFF THE FUTURE TARGET (v0.13),
+//  THE BRAKE FINISHED — SETTLE, COUNTDOWN, REACH RULE, AND A DIAL (v0.14).
 //
 //  v0.12 retires the turnaround. Its guarantee had narrowed with every
 //  correctness fix (over-capacity speeds and ceiling-bound rises both
@@ -65,6 +66,76 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  -0.342/-0.287 vs v0.12's -0.230/-0.224 — sub-brake recoveries are
 //  suppressed by design (a release hold does the same). CPU 83.4 ns
 //  per sample (1.08x of v0.12, generic -double -mcd 0 -Ofast).
+//
+//  v0.14 finishes the brake, prices it, and hands over the dial.
+//  The net of one long bench session, in four parts:
+//
+//  SETTLE ONTO LEVELS, RIDE SLOPES. v0.13 froze every braked
+//  release, including the harmless ones below the coming floor.
+//  Those now retarget to the floor itself and run an ordinary full
+//  shaped release INTO the level the envelope will be asked to hold
+//  — brisk through the middle, decelerating only in the shape's own
+//  tail, landing and parking. (A velocity-cap variant settling
+//  exponentially over one brake window was tried first and replaced:
+//  the asymptote never lands, and dense material crawled at a few
+//  percent of curve speed.) The retarget fires only while the floor
+//  is STEADY — a reigning deepest sample holds attackMinAhead
+//  bit-constant, a slope's minimum drifts every sample — so smooth
+//  descents are ridden at the attack window, not slope*(att+brake)
+//  under the signal (0.4 of level at the worst smooth-descent
+//  motif); approaching from below can never end above the floor, so
+//  every brake guarantee survives.
+//
+//  RISE WHILE YOU CAN — THE RAMP IS A COUNTDOWN. The brake had
+//  grown into a blanket ban on any rise it would have to give back
+//  within the horizon. But rise-and-duck is C1-safe whenever the
+//  rise reaches ZERO SPEED by the bind, and the bind is knowable:
+//  when a gap opens by attackMinAhead DROPPING, the bind is exactly
+//  brake_samples later, so the ramp doubles as a countdown — time to
+//  bind = (1-brakeRamp)*brake_samples — and any later, deeper drop
+//  only pushes the true bind further out (gapFresh). An above-floor
+//  release whose remaining flight fits a trusted countdown runs
+//  FREE: it lands at the present target and the attack departs from
+//  a standstill AT the target — the full bump. One that cannot land
+//  in time fades linearly to zero exactly at the bind — a partial
+//  bump, still kink-free. Fading BELOW-floor releases too was tried
+//  and reverted: perpetual gaps on dense material keep the ramp
+//  saturated and freeze releases that threaten nothing (the v0.13
+//  level loss, reimported). Only countdown-invalid standstill
+//  births remain held.
+//
+//  THE REACH RULE RESTORED. v0.9's release branch pick
+//  (strand-versus-overshoot) existed to duck the upward-retarget
+//  lunge of the turnaround era; its overshoot estimate overstates
+//  late in flight, so dense upward retargets kept re-anchoring
+//  rising releases onto the decelerating tail — the envelope
+//  rounded off and parked far below its target, 0.03-0.04 of mean
+//  envelope in BOTH dial positions. v0.4's reach rule is back, and
+//  the lunge is fixed at its root: while braking, an upward release
+//  retarget re-derives the span entry-style (Step 3), restoring
+//  span/position consistency by construction; outside braking the
+//  surviving lunges measure at v0.4 parity (max ~0.004, zero deep
+//  corners) — the cost the reference behavior always paid, caught
+//  by the ordinary attack-back.
+//
+//  THE DIAL. Smoothness and level retention turned out to be ONE
+//  trade with two ends — the brake's corner-free binds against
+//  v0.4's full-speed bumps — so brakeEnable (below) selects the end
+//  instead of the algorithm choosing for you. Measured on the full
+//  battery (two 60 s noisy staircase panels, the blocky and noisy
+//  user scenes, the square loop), zero deep corners everywhere in
+//  both modes. ON: panel mean envelope -0.2075/-0.2097 (v0.13:
+//  -0.342/-0.287), worst flip 0.0004-0.0014 at 4-26 per minute, the
+//  square loop at zero flips; the residual flips are the
+//  masked-succession class, bounded by the per-minimum-age
+//  limitation. OFF: bit-equal to the reach rule on the v0.4
+//  baseline — mean envelope within 0.002 of v0.4 on every scene,
+//  with v0.4's flip statistics (600-1300 per minute at 40-77% of
+//  peak: the corners the brake exists to remove) — and the brake
+//  window of latency collapses with it. The open reconciliation —
+//  releases running free until the latest moment a curve-tail
+//  deceleration can still reach zero by the bind — needs
+//  capped-target machinery and is future work.
 //
 //  An attack arriving while a release was still in flight hit the
 //  clampedRatio floor: the opposite-sign speed matched to phase 0, the
@@ -399,7 +470,23 @@ rel_samples = rel*ma.SR:max(1);
 // more gently at more latency — the deceleration magnitude is
 // speed/brake. lookaheadSamples is the single source of truth for the
 // delay-line length and the latency.
-brake_samples = int(att_samples)+1;
+// THE DIAL (v0.14). brakeEnable = 1 is the brake: every release
+// arrives at every bind at ~zero speed (worst measured flip
+// 0.0004-0.0014 across the test battery, square loop zero), at a
+// measured cost of 0.017-0.026 of average envelope and partial
+// recovery bumps. brakeEnable = 0 is the v0.4 trajectory family:
+// full-speed rises, full bumps, mean envelope within 0.002 of v0.4
+// on every scene — and a velocity corner at every release-to-
+// attack flip (600-1300 per minute on dense material, up to 77% of
+// peak speed). Punctuality (zero deep corners) holds in BOTH
+// modes; the choice is purely corner-versus-level. With
+// brakeEnable = 0 every brake mechanism strips to nothing and the
+// extra brake window of latency collapses with it:
+// lookaheadSamples falls back to att_samples and attackMinAhead
+// coincides with lookaheadX, so braking is constant-false and the
+// compiler removes the rest.
+brakeEnable = 1;
+brake_samples = (int(att_samples)+1)*brakeEnable;
 brakeStep = 1/max(brake_samples, 1);
 lookaheadSamples = min(int(att_samples)+brake_samples, int(maxLookaheadSamples));
 
@@ -584,6 +671,64 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                 // brake_samples after appearing there.
                 braking = attackMinAhead<lookaheadX;
 
+                // COUNTDOWN VALIDITY (v0.14). The ramp doubles as a
+                // bind countdown — time to bind = (1-brakeRamp)*
+                // brake_samples — but only when the current gap's
+                // deepest minimum announced itself by DROPPING into
+                // the future window (then its bind is exactly
+                // brake_samples after the drop, and any later, deeper
+                // drop only pushes the true bind further out, so the
+                // countdown stays safe-or-conservative). A gap opened
+                // by the TARGET rising has a stale clock: the pending
+                // minimum was already mid-pipeline, its bind is
+                // sooner than the ramp claims, and nothing scheduled
+                // on it can be trusted.
+                gapFresh = (max(attackMinAhead<attackMinAhead')*braking)~_;
+
+                // RELEASE RETARGET (v0.14). While braking, a release
+                // BELOW the future floor no longer aims at lookaheadX
+                // with a velocity cap — it aims at the floor itself.
+                // The envelope then runs an ordinary full shaped
+                // release INTO the level it will be asked to hold:
+                // brisk through the middle, decelerating only in the
+                // release shape's own tail, landing (snap, park)
+                // instead of settling asymptotically. A velocity cap tried first was
+                // an exponential law with the brake window as time
+                // constant — C1, but decelerating everywhere and never
+                // arriving; on dense material it crawled at a few
+                // percent of curve speed with most of the headroom
+                // still unused. The retarget keeps every guarantee (an
+                // approach from below can never end up above the
+                // floor, whatever the durations) and reuses the whole
+                // existing transition machinery: target changes are
+                // ordinary retargets, absorbed by velocity matching.
+                // Above the floor nothing changes: the target stays
+                // lookaheadX and the time fade glides the release to a
+                // standstill. relTarget equals lookaheadX in every
+                // attacking state (attacking means prev > lookaheadX
+                // >= attackMinAhead), so attack spans are untouched.
+                // ...but only onto LEVELS, not slopes (v0.14). A
+                // genuine floor is one deepest sample reigning over
+                // the future window, so attackMinAhead is bit-constant
+                // while it reigns; on a gently descending input the
+                // window minimum is the trailing edge and drifts every
+                // sample. Without this gate, braking is true on ANY
+                // descent (a later window's min is always lower on a
+                // downslope) and the retarget pins the release to the
+                // input's value one full horizon ahead — the doubled-
+                // window tracking gap of v0.5–v0.11 returning through
+                // the brake, slope*(att+brake) of level lost on every
+                // smooth descent. Steady floors get the shaped settle
+                // and its zero-kink guarantee; drifting slopes are
+                // ridden at the attack window like v0.12, where the
+                // envelope meets the moving target in its own shape
+                // tail and tracks it through standstill micro-landings.
+                // The one-sample detection latency of a fresh floor is
+                // absorbed by velocity matching at the retarget.
+                floorSteady = (attackMinAhead==attackMinAhead');
+                relTarget = select2(braking&(prev<attackMinAhead)&floorSteady,
+                    lookaheadX, attackMinAhead);
+
                 // BIRTH HOLD (v0.13). The gap can also open by the
                 // TARGET rising (a recovery window shorter than the
                 // brake: the coming minimum equals the floor the
@@ -601,28 +746,34 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                 // ramp below covers it, and a multiplier step at a
                 // retarget is absorbed by velocity matching, which
                 // re-anchors at the measured speed.
-                freshHold = braking&(attackMinAhead<=prev)&(prevTotalStep==0);
-                releasing = (prev<lookaheadX)&(rel>0)&(1-freshHold);
+                freshHold = braking&(attackMinAhead<=prev)&(prevTotalStep==0)
+                    &(1-gapFresh);
+                releasing = (prev<relTarget)&(rel>0)&(1-freshHold);
 
-                // THE BRAKE (v0.12; re-clocked in v0.13: braking, the
-                // clock, is computed at shapedSmoother level by
-                // comparing the future target to the present one). The
-                // ramp must integrate HERE, where braking arrives as a
-                // plain input: written at shapedSmoother level, the
-                // recursion's feedback binds to the wrong free input —
-                // braking's definition pulls x in as a free variable,
-                // the ~ closes over that, and the multiplier silently
-                // leaves [0, 1]. The multiplier scales RELEASE
-                // increments only: releasing is 0/1, so during an
-                // attack it is exactly 1 even while the ramp stays
-                // saturated for a further pending minimum — an attack
-                // is never slowed. At every bind the ramp has just
-                // saturated, so the release it scaled is already at a
-                // standstill: the attack enters from ~zero speed
-                // through velocity matching and the seam is C1 at any
-                // inherited speed.
+                // THE BRAKE's time fade (v0.12, re-clocked v0.13).
+                // The ramp integrates braking; it must integrate HERE,
+                // where braking arrives as a plain input — written at
+                // shapedSmoother level the recursion's feedback binds
+                // to the wrong free input, x leaks in through
+                // braking's definition, and the multiplier silently
+                // leaves [0, 1]. The gap opens exactly brake_samples
+                // before a fresh deeper minimum binds, so the fade
+                // reaches zero exactly at the bind: an in-flight
+                // release that cannot land in time (fading, Step 7)
+                // glides to a standstill and its attack departs from
+                // ~zero speed. Releases below the floor are handled by
+                // the retarget above, not by the fade.
+                //
+                // Residual (bounded, documented): one scalar ramp and
+                // one future minimum cannot time STAGGERED threats
+                // individually. A deeper minimum arriving mid-settle
+                // flips the regime from shaped release to saturated
+                // fade — a deceleration step bounded by the current
+                // curve speed — and an equal-depth succession caught
+                // mid-flight keeps a partial fade. Exact per-threat
+                // timing needs per-minimum age: the countdown
+                // machinery this design retired.
                 brakeRamp = ((_+brakeStep):min(1)*braking)~_;
-                brakeMult = 1-brakeRamp*releasing;
                 active = attacking|releasing;
 
                 // --- Step 2: Select shape parameters for current direction ---
@@ -631,6 +782,8 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                 zeroVal = select2(releasing, attackZero, releaseZero);
                 maxDerivVal = select2(releasing, attackMaxDerivBase, releaseMaxDerivBase);
                 step = select2(releasing, attStep, relStep);
+                durSamples = select2(releasing,
+                    (att*ma.SR:max(1))+1, (rel*ma.SR:max(1))+1);
                 halfStep = 0.5*step;
 
                 // --- Curve helpers ---
@@ -690,15 +843,31 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                 // envelope decelerates along the curve at the curve's
                 // steepest rate; the deliberate overshoot this allows is
                 // caught by the output clamps in Step 7.
-                incrementalTotalStep = prevTotalStep+(lookaheadX-lookaheadX');
-                entryTotalStep = lookaheadX-prev;
+                incrementalTotalStep = prevTotalStep+(relTarget-relTarget');
+                entryTotalStep = relTarget-prev;
                 supportTotalStep = select2(releasing, 0-abs(prevSpeed), prevSpeed)
                     *select2(releasing, attackSupportRecip, releaseSupportRecip);
 
+                // BRAKING-GATED RESPAN (v0.14). While braking, an
+                // upward release retarget re-derives the span entry-
+                // style (relTarget-prev) instead of incrementally. The
+                // brake's own retargets — a settle handing its floor
+                // back to lookaheadX — are exactly the large upward
+                // jumps where the grown incremental span and the
+                // unchanged remaining distance go inconsistent and the
+                // accelerating anchor would lunge past the target by
+                // the already-traversed distance. Re-deriving the span
+                // restores consistency by construction, so the reach
+                // rule (Step 5) can pick freely: measured, this nearly
+                // halves the pre-respan residual flips while returning
+                // 0.016-0.024 of mean envelope. Outside braking the
+                // incremental span stands — per-jitter respans on
+                // plain noise measurably cost level — and with the
+                // brake disabled the gate strips the respan entirely.
                 totalStep = select2(releasing,
                     min(select2(prevTotalStep>=0, incrementalTotalStep, entryTotalStep),
                         supportTotalStep),
-                    max(select2(prevTotalStep<=0, incrementalTotalStep, entryTotalStep),
+                    max(select2((prevTotalStep<=0)|((relTarget>relTarget')&braking), incrementalTotalStep, entryTotalStep),
                         supportTotalStep))*active;
 
                 // --- Step 4: trusted phase advance vs. velocity matching ---
@@ -717,7 +886,7 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                 // The last test moved off prevPhase == 0: the rise leg of a
                 // turnaround ends at phase 0.0 exactly, and the descent
                 // re-enters through it.
-                sameTarget = (lookaheadX==lookaheadX');
+                sameTarget = (relTarget==relTarget');
                 sameDirection = (releasing==releasing')&(attacking==attacking');
                 undisturbed = (prev==prevExpected);
                 trusted = sameTarget&sameDirection&undisturbed&(prevTotalStep!=0);
@@ -803,38 +972,37 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                     projectedFast>lookaheadX,
                     projected>lookaheadX);
 
-                // v0.9: the reach-preference is attack-only. Its
-                // rationale — stranding short arrives LATE, and late is
-                // what the attack's lookahead contract cannot absorb —
-                // does not transfer to the release, which has no
-                // deadline: there, stranding just hands the leftover to
-                // a fresh micro-release (the documented drifting-target
-                // behavior), while REACHING from the accelerating
-                // anchor traverses the whole span. After an upward
-                // retarget near completion the span has grown but the
-                // remaining distance has not, so the accelerating pick
-                // lunges past the target by (span - remaining) — the
-                // already-traversed distance — rides the input clamp,
-                // and parks far above every level still in flight: the
-                // deep "turnaround too late" corners. The release now
-                // picks the accelerating anchor only when the
-                // decelerating anchor's strand exceeds that overshoot.
-                // overshootBottom = prev + totalStep - lookaheadX is the
-                // traversed distance (>= 0), zero at a fresh entry — so
-                // the rule reduces exactly to the old one where the old
-                // one was right, and flips exactly on late-phase upward
-                // retargets, where it was not.
-                strandTop = lookaheadX-select2(exactBranchPick, projectedFast, projected);
-                overshootBottom = prev+totalStep-lookaheadX;
+                // THE REACH RULE, RESTORED (v0.14). The release picks
+                // the accelerating anchor unless the decelerating
+                // anchor still reaches the target — v0.4's rule, same
+                // as the attack's. v0.9 had replaced it with a strand-
+                // versus-overshoot comparison to duck a real lunge:
+                // after an upward retarget the incremental span has
+                // grown but the remaining distance has not, so the
+                // accelerating anchor overshoots by the already-
+                // traversed distance. That patch treated the symptom
+                // and billed every noisy rise for it — its overshoot
+                // estimate overstates systematically late in flight,
+                // so dense upward retargets kept re-anchoring releases
+                // onto the decelerating tail, and the envelope rounded
+                // off and stalled far below its target: 0.03-0.04 of
+                // mean envelope across the noisy battery, the
+                // premature-deceleration stall on the scope. The
+                // lunge's root — the span/position inconsistency — is
+                // now fixed at the source while braking (the respan,
+                // Step 3); outside braking the surviving lunges
+                // measure at v0.4 parity (max ~0.004 of full scale,
+                // zero deep corners): the cost the reference behavior
+                // always paid, caught by the ordinary attack-back.
                 forwardPos = select2(releasing,
                     // Attack branch
                     select2(gonnaMakeIt,
                         1-bottomReleaseD,
                         1-topReleaseD),
                     // Release branch
-                    select2(strandTop>overshootBottom,
-                        topReleaseD,
-                        bottomReleaseD))+matchCorr:max(0):min(1-step);
+                    select2(gonnaMakeIt,
+                        bottomReleaseD,
+                        topReleaseD))+matchCorr:max(0):min(1-step);
 
                 matchedPos = forwardPos;
 
@@ -857,16 +1025,38 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                 // quadrature on the cheap rational derivative (see v0.4
                 // note B; the derivative of fdOf is the same expression for
                 // both directions — the attack flip's two sign changes
-                // cancel in the chain rule). v0.12: the brake scales the
-                // increment; braking implies prev <= lookaheadX, so an
-                // attack increment is never braked.
+                // cancel in the chain rule). The select keeps attack
+                // increments exact; release increments take the larger
+                // of the brake's two allowances (see Step 1).
                 glA = 0.21132486540518713;
                 glB = 0.78867513459481287;
                 derivOf(p) = derivativeBaseRelease(shape,
                     select2(releasing, 1-p, p))*invCurveScale;
+                // RISE WHILE YOU CAN (v0.14). Applies to the ABOVE-
+                // floor branch only — a release already over the
+                // coming minimum, the one that must reach zero speed
+                // by the bind. It is exempt from the fade when its
+                // remaining flight fits inside a TRUSTED countdown: it
+                // lands — zero speed — before the bind, so the bump
+                // toward the present target is taken in full and the
+                // attack departs from a standstill at the target
+                // itself. One that cannot land in time is faded
+                // linearly to zero exactly at the bind: a partial
+                // bump, still kink-free. Below the floor nothing
+                // changes (settle onto steady floors, ride slopes;
+                // such a release never needs zero bind speed), and
+                // only countdown-invalid standstill births remain
+                // held. Fading below-floor releases too — tried and
+                // reverted — reimports the v0.13 level loss on dense
+                // material: perpetual gaps keep the ramp saturated and
+                // the fade freezes releases that threaten nothing.
+                willLand = (1-anchor)*durSamples
+                    <= (1-brakeRamp)*brake_samples;
+                fading = releasing&braking&(prev>=attackMinAhead)
+                    &(1-(gapFresh&willLand));
                 delta = totalStep*step*0.5
                     *(derivOf(anchor+glA*step)+derivOf(anchor+glB*step))
-                    *brakeMult;
+                    *(1-brakeRamp*fading);
 
                 // The value this loop wants to write. Stored as state so the
                 // next sample can detect outside modification (see Step 4).
@@ -899,11 +1089,11 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                 // delayed sample).
                 phaseDone = active&(newPhaseRaw>=(1-halfStep));
                 guardSize = abs(totalStep)*maxDerivVal*invCurveScale*step;
-                landed = phaseDone&(abs(lookaheadX-expected)<=guardSize);
+                landed = phaseDone&(abs(relTarget-expected)<=guardSize);
 
                 result = select2(landed,
                     min(expected, delayedX),
-                    min(lookaheadX, delayedX)):max(min(prev, lookaheadX));
+                    min(relTarget, delayedX)):max(min(prev, lookaheadX));
 
                 // With the state cleared: constant target -> idle as
                 // before; drifting target -> fresh micro-transitions that
@@ -924,13 +1114,21 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
 //    `step` per sample; trusted between discontinuities, re-derived
 //    from the measured speed (velocity matching) across them.
 //
-//  braking (v0.12, re-clocked v0.13):
+//  braking (v0.12, re-clocked v0.13, finished v0.14):
 //    The future attack target (attackMinAhead = lookaheadX read
 //    brake_samples ahead) is below the present one; a bind is exactly
-//    brake_samples away when this turns true. The release increment is
-//    scaled by 1-brakeRamp, a linear ramp that saturates exactly at
-//    the bind, so every attack enters from a standstill. Releases born
-//    inside an open gap start already-braked: recoveries shorter than
+//    brake_samples away when this turns true. A release above the
+//    coming floor is faded out by 1-brakeRamp, a linear ramp that
+//    saturates exactly at the bind, so its attack enters from a
+//    standstill; a release below a STEADY coming floor (one deepest
+//    sample reigning: attackMinAhead bit-constant) retargets to the
+//    floor itself and runs an ordinary shaped release into it,
+//    landing and parking (v0.14); drifting minima — slopes —
+//    are ridden at the attack window. ABOVE the floor (v0.14), a
+//    release whose remaining flight fits a trusted countdown runs
+//    free and lands before the bind; one that cannot is faded to
+//    zero exactly at it. Standstill births under a pending
+//    at-or-below duck are held (freshHold): recoveries shorter than
 //    the brake window are suppressed, release-hold style.
 //
 //  turnaround (v0.5–v0.11, retired):
