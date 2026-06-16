@@ -265,12 +265,7 @@ declare copyright "2026 - 2026, Bart Brouns";
 //     never re-gated — the rise sits exactly on the gate's own equality,
 //     so re-testing it would reduce to rounding noise. (Up to v0.6 a
 //     `turnaround` slider scaled the budget, and 0 made the feature
-//     inert — with exactBranchPick = 1 that was a bit-for-bit A/B
-//     against v0.4. v0.7 fixes the budget at 1, so that escape hatch is
-//     gone; exactBranchPick remains an independent exact-vs-fitted
-//     switch for the landing projection, see Step 5. The default
-//     approximated branch pick can resolve razor-edge matching
-//     recoveries differently.)
+//     inert; v0.7 fixes the budget at 1, so that escape hatch is gone.)
 //
 //     During the hold the in-flight release simply continues — its span
 //     frozen against the (already dropped) target, its phase trusted —
@@ -320,7 +315,7 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  extra attack, i.e. doubled lookahead. Per sample, measured against
 //  v0.4 in the generated C++ (48 kHz, -O3 -ffast-math, block 256,
 //  random steps): v0.4 1.00x, first turnaround draft 2.4x, v0.6 1.41x
-//  — or 1.86x with exactBranchPick = 1. v0.6 measured against THIS
+//  — or 1.86x with the exact-curve projection. v0.6 measured against THIS
 //  version, same flags, isolated smoother (input-driven process, no
 //  test-signal cost), Xeon 2.8 GHz: v0.6 = 1.05–1.10x of v0.7
 //  across repeated runs, at the defaults and at att = 2 ms /
@@ -336,13 +331,12 @@ declare copyright "2026 - 2026, Bart Brouns";
 //  time-neutral on a wide core (the discarded twin ran in parallel on
 //  the divider port) but halves the loop's sqrt count at bit-identical
 //  output. Audio-rate transcendentals per sample: v0.4 = 1 log,
-//  1 atan, 2 sqrt; this version's default = 0 log, 0 atan, 1 sqrt —
-//  the forward and mirror inversions share one evaluation (Step 5),
-//  and the branch pick reads slider-rate-fitted cubics instead of
-//  evaluating the curve. (exactBranchPick = 1 brings the log+atan pair
-//  back: it is v0.4's own gonnaMakeIt projection, kept verbatim; its
-//  per-shape constants are hoisted, bit-identically, through the
-//  direction select.) What the turnaround itself adds is rational and
+//  1 atan, 2 sqrt; this version = 1 log, 1 atan, 1 sqrt — the forward
+//  and mirror inversions share one evaluation (Step 5), and the
+//  landing projection evaluates the exact curve, v0.4's own
+//  gonnaMakeIt projection kept verbatim (its per-shape constants
+//  hoisted, bit-identically, through the direction select). What the
+//  turnaround itself adds is rational and
 //  cheap: the gate's cross-multiplied comparison, the arrival counter,
 //  signum/abs in the quadrature, and one more sliding-min level from
 //  the doubled window. The lookahead clamp keeps the generated ring
@@ -400,9 +394,6 @@ cheapCurveBase(c, x) = (log(c*x*x+(1-c))+2*sqrt((1/c)-1)*atan(x/sqrt((1/c)-1))-2
 
 curveScale(c) = cheapCurveBase(c, 1)-cheapCurveBase(c, 0);
 
-cheapCurveRelease(c, x) = (cheapCurveBase(c, x)-cheapCurveBase(c, 0))/curveScale(c);
-cheapCurveAttack(c, x) = 1-cheapCurveRelease(c, 1-x);
-
 //  Denominators rewritten as sums of non-negative terms for float32
 //  conditioning at sharp shapes (see the note above cheapCurveBase):
 //    c*x*x+1-c       == c*x*x+(1-c)
@@ -414,17 +405,10 @@ derivativeRelease(c, x) = derivativeBaseRelease(c, x)/curveScale(c);
 derivativeAttack(c, x) = derivativeBaseAttack(c, x)/curveScale(c);
 
 peakPhaseAttack(c) = 1-sqrt(1-c)*(1-sqrt(1-c))/max(1e-10, c);
-peakPhaseRelease(c) = 1-peakPhaseAttack(c);
 
 maxDerivativeBaseAttack(c) = derivativeBaseAttack(c, peakPhaseAttack(c));
 
 inverseDerivativePart(c, D) = sqrt(max(0, 1-4*D*(1-c)*(c*D+1)));
-
-inverseDerivativeTopRelease(c, D) = (1+inverseDerivativePart(c, D))/(2*(c*D+1));
-inverseDerivativeBottomRelease(c, D) = (1-inverseDerivativePart(c, D))/(2*(c*D+1));
-
-inverseDerivativeTopAttack(c, D) = 1-inverseDerivativeTopRelease(c, D);
-inverseDerivativeBottomAttack(c, D) = 1-inverseDerivativeBottomRelease(c, D);
 
 // ============================================================================
 //  THE ENVELOPE FOLLOWER
@@ -441,20 +425,6 @@ maxHold = 0.05;
 maxSR = 48000;
 maxHoldSamples = maxHold*maxSR;
 maxLookaheadSamples = 2*maxHoldSamples+1;
-
-// Compile-time switch. 1 makes the landing projection inside velocity
-// matching evaluate the exact curve — v0.4's own projection, verbatim
-// (the bit-for-bit v0.4 A/B it used to enable required turnaround = 0,
-// which v0.7 removed) — at the price of an audio-rate
-// log+atan pair, the single most expensive thing in the loop (see
-// COSTS). The default evaluates per-direction cubics fitted to the
-// curve's deceleration tail at slider rate instead; the pick they
-// produce can differ from the exact one only when the projected landing
-// sits within the fit error of the target (2e-4 of the span for the
-// attack, 1.3e-2 for the release), where either pick is absorbed by the
-// landing machinery. Faust folds the constant, so the unused path costs
-// nothing.
-exactBranchPick = 0;
 
 att = attMs/1000;
 rel = relMs/1000;
@@ -531,34 +501,6 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
         attackMaxDerivBase = maxDerivativeBaseAttack(attackShape);
         releaseMaxDerivBase = maxDerivativeBaseAttack(releaseShape);
 
-        attackPeakPhase = peakPhaseAttack(attackShape);
-
-        releasePeakPhase = peakPhaseRelease(releaseShape);
-
-        // Tail fit (for the default approximated branch pick, Step 5):
-        // per direction, two cubics interpolating the exact fraction-done
-        // curve over the deceleration tail [peakPhase, 1] — the only
-        // region the landing projection ever evaluates — split at
-        // u = 0.15 in tail coordinates. Fitted HERE, at slider rate,
-        // where the curve's log+atan cost nothing; the loop then sees
-        // only a Horner evaluation. Max fit error across the full shape
-        // range: 2e-4 for the attack tail, 1.3e-2 for the release tail
-        // (whose tail spans nearly the whole curve at sharp shapes).
-        tailSplit = 0.15;
-        // monomial coefficients of the cubic through f at t = 0, 1/3, 2/3, 1
-        tc0(f0, f1, f2, f3) = f0;
-        tc1(f0, f1, f2, f3) = 9*f1-5.5*f0-4.5*f2+f3;
-        tc2(f0, f1, f2, f3) = 9*f0-22.5*f1+18*f2-4.5*f3;
-        tc3(f0, f1, f2, f3) = 13.5*f1-4.5*f0-13.5*f2+4.5*f3;
-        attackTailFd(u) = cheapCurveAttack(attackShape,
-            attackPeakPhase+u*(1-attackPeakPhase));
-        releaseTailFd(u) = cheapCurveRelease(releaseShape,
-            releasePeakPhase+u*(1-releasePeakPhase));
-        attLoF(k) = attackTailFd(k*tailSplit/3);
-        attHiF(k) = attackTailFd(tailSplit+k*(1-tailSplit)/3);
-        relLoF(k) = releaseTailFd(k*tailSplit/3);
-        relHiF(k) = releaseTailFd(tailSplit+k*(1-tailSplit)/3);
-
         // Fencepost: a transition occupies the CLOSED interval of N+1 output
         // samples [entry .. entry+N], so the phase advances in N+1 steps of
         // 1/(N+1). With 1/N the attack landed one sample early: lookaheadX
@@ -583,8 +525,7 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
         // leg's trajectory transiently before the landing machinery
         // re-converges it (measured on 30 s of random steps: <= ~1e-4 of
         // full scale at the defaults, <= ~3e-3 at att = 2 ms /
-        // shapes = 0.9) — the same class of difference the default
-        // branch pick already carries vs exactBranchPick = 1.
+        // shapes = 0.9).
         attackSupportRecip = 1/(attackMaxDerivBase*attackInvCurveScale*attStep);
         releaseSupportRecip = 1/(releaseMaxDerivBase*releaseInvCurveScale*relStep);
 
@@ -594,7 +535,7 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
         //  State carried between samples:
         //    prev          — current envelope value
         //    prevPhase     — where we are on the curve. [0, 1] for a release
-        //                    or a plain attack; [-attackPeakPhase, 0] for the
+        //                    or a plain attack; [-peakPhaseAttack, 0] for the
         //                    rise leg of a turnaround, whose negative phase
         //                    addresses the mirrored attack curve.
         //    prevTotalStep — total span of the current transition. Also the
@@ -798,8 +739,6 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                 // the direction select so the loop carries no sqrt or
                 // reciprocal for them; the arithmetic order is preserved,
                 // so the result is bit-identical to the unhoisted form.
-                // (Alive only when exactBranchPick = 1 — otherwise this
-                // whole chain is pruned.)
                 kVal = select2(releasing,
                     sqrt((1/attackShape)-1), sqrt((1/releaseShape)-1));
                 twoC = select2(releasing, 2*attackShape, 2*releaseShape);
@@ -923,54 +862,17 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
                 // reaches can at worst overshoot, which the clamps and the
                 // landing guard catch; an anchor that strands short
                 // arrives LATE, and on the attack side late is the one
-                // thing the lookahead contract cannot absorb.
-                //
-                // The projection needs the curve's fraction-done at the
-                // late anchor. Two ways to get it, one compile-time switch
-                // (exactBranchPick):
-                //
-                //   default: evaluate the per-direction tail cubics fitted
-                //   at slider rate (see the tail fit above). The anchor
-                //   always lies on [peakPhase, 1], so the fit covers
-                //   everything the projection can ask for. The pick can
-                //   differ from the exact one only when the projected
-                //   landing sits within the fit error of the target
-                //   (2e-4 of the span for the attack, 1.3e-2 for the
-                //   release) — where both picks land within a few guard
-                //   sizes and either is absorbed: a snap or one small
-                //   fresh transition. The attack's duck deadline is
-                //   protected to 2e-4 of the span; the release has no
-                //   deadline.
-                //
-                //   exact (v0.4): evaluate the curve itself — the
-                //   log+atan pair, the single most expensive thing in the
-                //   loop — every sample.
+                // thing the lookahead contract cannot absorb. The
+                // projection reads the curve's fraction-done at the late
+                // anchor directly — the log+atan pair in cbAt, the single
+                // most expensive thing in the loop, evaluated once a sample.
                 lateAnchor = select2(releasing,
                     1-bottomReleaseD,
                     topReleaseD)+matchCorr:min(1);
 
                 gonnaDo(phase) = (1-fdOf(phase))*totalStep;
                 projected = gonnaDo(lateAnchor)+prev;
-
-                uLate = (lateAnchor-select2(releasing, attackPeakPhase, releasePeakPhase))
-                    *select2(releasing, 1/(1-attackPeakPhase), 1/(1-releasePeakPhase))
-                    :max(0):min(1);
-                tailPiece = uLate>tailSplit;
-                tailT = (uLate-tailPiece*tailSplit)
-                    *select2(tailPiece, 1/tailSplit, 1/(1-tailSplit));
-                tcSel(tc) = select2(releasing,
-                    select2(tailPiece,
-                        tc(attLoF(0), attLoF(1), attLoF(2), attLoF(3)),
-                        tc(attHiF(0), attHiF(1), attHiF(2), attHiF(3))),
-                    select2(tailPiece,
-                        tc(relLoF(0), relLoF(1), relLoF(2), relLoF(3)),
-                        tc(relHiF(0), relHiF(1), relHiF(2), relHiF(3))));
-                fdLate = tcSel(tc0)+tailT*(tcSel(tc1)+tailT*(tcSel(tc2)+tailT*tcSel(tc3)));
-                projectedFast = (1-fdLate)*totalStep+prev;
-
-                gonnaMakeIt = select2(exactBranchPick,
-                    projectedFast>lookaheadX,
-                    projected>lookaheadX);
+                gonnaMakeIt = projected>lookaheadX;
 
                 // THE REACH RULE, RESTORED (v0.14). The release picks
                 // the accelerating anchor unless the decelerating
@@ -1179,10 +1081,8 @@ shapedSmoother(x) = lookaheadX, attackMinAhead, delayedX:env~(_, _, _, _):(_, _,
 //    "If we re-anchor on the decelerating branch now, will the resulting
 //    trajectory still reach the target?" Picks the accelerating vs
 //    decelerating branch of the inverse derivative, preferring the one
-//    that reaches (overshoot is clampable; stranding short is late). By
-//    default the projection evaluates slider-rate-fitted tail cubics;
-//    exactBranchPick = 1 evaluates the true curve (the log+atan pair)
-//    every sample instead.
+//    that reaches (overshoot is clampable; stranding short is late). The
+//    projection evaluates the true curve (the log+atan pair in cbAt).
 //
 //  landing:
 //    When a leg's phase completes, the transition state is fully reset.
