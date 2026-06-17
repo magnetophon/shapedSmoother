@@ -317,10 +317,7 @@ releaseSmoother(x) = dirSmoother(1, x);
 //  Swap the order, drop a stage, or feed either follower a different
 //  target — they are independent.
 // ============================================================================
-shapedSmoother(x) = x
-    : ba.slidingMin(int(att_samples)+1, 1+maxLookaheadSamples)
-    : attackSmoother
-    : releaseSmoother;
+shapedSmoother(x) = x:ba.slidingMin(int(att_samples)+1, 1+maxLookaheadSamples):releaseSmoother:attackSmoother;
 
 process = testSignal<:(_@lookaheadSamples, shapedSmoother(_));
 
