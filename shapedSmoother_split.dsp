@@ -184,125 +184,123 @@ releaseSupportRecip = 1/(releaseMaxDerivBase*releaseInvCurveScale*relStep);
 //                    modified outside, so velocity-match instead of
 //                    trusting the stored phase.
 // ============================================================================
-dirSmoother(isRel, target) = target : loop ~ si.bus(4) : (_, !, !, !)
-with {
-    // Direction-fixed per-shape selections (constant-folded per instance).
-    shp       = select2(isRel, attackShape, releaseShape);
-    invCS     = select2(isRel, attackInvCurveScale, releaseInvCurveScale);
-    zeroV     = select2(isRel, attackZero, releaseZero);
-    maxDB     = select2(isRel, attackMaxDerivBase, releaseMaxDerivBase);
-    stp       = select2(isRel, attStep, relStep);
-    suppRecip = select2(isRel, attackSupportRecip, releaseSupportRecip);
-    kV        = select2(isRel, sqrt((1/attackShape)-1), sqrt((1/releaseShape)-1));
-    twoC      = select2(isRel, 2*attackShape, 2*releaseShape);
-    oneMinusC = select2(isRel, 1-attackShape, 1-releaseShape);
-    rateOK    = select2(isRel, att>0, rel>0);
-    halfStep  = 0.5*stp;
-
-    loop(prev, prevPhase, prevTotalStep, prevExpected, target)
-        = result, newPhase, totalStepOut, expected
+dirSmoother(isRel, target) = target:loop~si.bus(4):(_, !, !, !)
     with {
-        prevSpeed = prev-prev';
+        // Direction-fixed per-shape selections (constant-folded per instance).
+        shp = select2(isRel, attackShape, releaseShape);
+        invCS = select2(isRel, attackInvCurveScale, releaseInvCurveScale);
+        zeroV = select2(isRel, attackZero, releaseZero);
+        maxDB = select2(isRel, attackMaxDerivBase, releaseMaxDerivBase);
+        stp = select2(isRel, attStep, relStep);
+        suppRecip = select2(isRel, attackSupportRecip, releaseSupportRecip);
+        kV = select2(isRel, sqrt((1/attackShape)-1), sqrt((1/releaseShape)-1));
+        twoC = select2(isRel, 2*attackShape, 2*releaseShape);
+        oneMinusC = select2(isRel, 1-attackShape, 1-releaseShape);
+        rateOK = select2(isRel, att>0, rel>0);
+        halfStep = 0.5*stp;
 
-        // Smoothed direction active?  attack: prev>target ; release:
-        // prev<target. The opposite direction is the instant branch
-        // (result, below).
-        moving = select2(isRel, prev>target, prev<target) & rateOK;
-        active = moving;
+        loop(prev, prevPhase, prevTotalStep, prevExpected, target) = result, newPhase, totalStepOut, expected
+            with {
+                prevSpeed = prev-prev';
 
-        // --- Curve helpers (one direction's transcendentals) ---
-        cbAt(p) = ((log(shp*xx*xx+oneMinusC)
-            +2*kV*atan(xx/kV)-2*xx)/twoC-zeroV)*invCS
-        with { xx = select2(isRel, 1-p, p); };
-        fdOf(p) = select2(isRel, 1-cbAt(p), cbAt(p));
-        derivOf(p) = derivativeBaseRelease(shp, select2(isRel, 1-p, p))*invCS;
+                // Smoothed direction active?  attack: prev>target ; release:
+                // prev<target. The opposite direction is the instant branch
+                // (result, below).
+                moving = select2(isRel, prev>target, prev<target)&rateOK;
+                active = moving;
 
-        // --- Step 1: totalStep (incremental; entry on restart; support) ---
-        // No brake: the target is the plain input. The support floor uses
-        // the SIGNED prevSpeed on BOTH sides (v0.4): an inherited
-        // opposite-sign speed must not inflate the span — velocity
-        // matching clamps such an entry to a standstill anyway, and the
-        // v0.12 two-sided floor only existed for the (now absent)
-        // turnaround.
-        incrementalTotalStep = prevTotalStep+(target-target');
-        entryTotalStep = target-prev;
-        supportTotalStep = prevSpeed*suppRecip;
-        totalStep = select2(isRel,
-            min(select2(prevTotalStep>=0, incrementalTotalStep, entryTotalStep),
-                supportTotalStep),
-            max(select2(prevTotalStep<=0, incrementalTotalStep, entryTotalStep),
-                supportTotalStep))*active;
+                // --- Curve helpers (one direction's transcendentals) ---
+                cbAt(p) = ((log(shp*xx*xx+oneMinusC)+2*kV*atan(xx/kV)-2*xx)/twoC-zeroV)*invCS
+                    with {
+                        xx = select2(isRel, 1-p, p);
+                    };
+                fdOf(p) = select2(isRel, 1-cbAt(p), cbAt(p));
+                derivOf(p) = derivativeBaseRelease(shp, select2(isRel, 1-p, p))*invCS;
 
-        // --- Step 2: trusted phase vs velocity matching ---
-        sameTarget = (target==target');
-        sameDirection = (moving==moving');
-        undisturbed = (prev==prevExpected);
-        trusted = sameTarget&sameDirection&undisturbed&(prevTotalStep!=0);
+                // --- Step 1: totalStep (incremental; entry on restart; support) ---
+                // No brake: the target is the plain input. The support floor uses
+                // the SIGNED prevSpeed on BOTH sides (v0.4): an inherited
+                // opposite-sign speed must not inflate the span — velocity
+                // matching clamps such an entry to a standstill anyway, and the
+                // v0.12 two-sided floor only existed for the (now absent)
+                // turnaround.
+                incrementalTotalStep = prevTotalStep+(target-target');
+                entryTotalStep = target-prev;
+                supportTotalStep = prevSpeed*suppRecip;
+                totalStep = select2(isRel,
+                    min(select2(prevTotalStep>=0, incrementalTotalStep, entryTotalStep),
+                        supportTotalStep),
+                    max(select2(prevTotalStep<=0, incrementalTotalStep, entryTotalStep),
+                        supportTotalStep))*active;
 
-        // --- Step 3: velocity matching (shared inversion, v0.7) ---
-        matchCorr = halfStep*(sameDirection&(prevTotalStep!=0));
-        speedRatio = prevSpeed/(totalStep*invCS*stp+(1-active)*1e-30);
+                // --- Step 2: trusted phase vs velocity matching ---
+                sameTarget = (target==target');
+                sameDirection = (moving==moving');
+                undisturbed = (prev==prevExpected);
+                trusted = sameTarget&sameDirection&undisturbed&(prevTotalStep!=0);
 
-        matchD = max(0, min(speedRatio, maxDB));
-        partD = inverseDerivativePart(shp, matchD);
-        denD = 2*(shp*matchD+1);
-        topReleaseD = (1+partD)/denD;
-        bottomReleaseD = (1-partD)/denD;
+                // --- Step 3: velocity matching (shared inversion, v0.7) ---
+                matchCorr = halfStep*(sameDirection&(prevTotalStep!=0));
+                speedRatio = prevSpeed/(totalStep*invCS*stp+(1-active)*1e-30);
 
-        lateAnchor = select2(isRel, 1-bottomReleaseD, topReleaseD)+matchCorr:min(1);
-        gonnaDo(phase) = (1-fdOf(phase))*totalStep;
-        projected = gonnaDo(lateAnchor)+prev;
-        gonnaMakeIt = projected>target;
+                matchD = max(0, min(speedRatio, maxDB));
+                partD = inverseDerivativePart(shp, matchD);
+                denD = 2*(shp*matchD+1);
+                topReleaseD = (1+partD)/denD;
+                bottomReleaseD = (1-partD)/denD;
 
-        // Reach rule (v0.4): pick the accelerating anchor unless the
-        // decelerating anchor still reaches the target (overshoot is
-        // clampable; stranding short arrives late).
-        forwardPos = select2(isRel,
-            select2(gonnaMakeIt, 1-bottomReleaseD, 1-topReleaseD),
-            select2(gonnaMakeIt, bottomReleaseD, topReleaseD))
-            +matchCorr:max(0):min(1-stp);
-        matchedPos = forwardPos;
+                lateAnchor = select2(isRel, 1-bottomReleaseD, topReleaseD)+matchCorr:min(1);
+                gonnaDo(phase) = (1-fdOf(phase))*totalStep;
+                projected = gonnaDo(lateAnchor)+prev;
+                gonnaMakeIt = projected>target;
 
-        // --- Step 4: advance phase ---
-        anchor = select2(trusted, matchedPos, (prevPhase:min(1-stp)));
-        newPhaseRaw = (anchor+stp)*active;
+                // Reach rule (v0.4): pick the accelerating anchor unless the
+                // decelerating anchor still reaches the target (overshoot is
+                // clampable; stranding short arrives late).
+                forwardPos = select2(isRel,
+                    select2(gonnaMakeIt, 1-bottomReleaseD, 1-topReleaseD),
+                    select2(gonnaMakeIt, bottomReleaseD, topReleaseD))+matchCorr:max(0):min(1-stp);
+                matchedPos = forwardPos;
 
-        // --- Step 5: curve increment (2-pt Gauss-Legendre); no brake fade ---
-        glA = 0.21132486540518713;
-        glB = 0.78867513459481287;
-        delta = totalStep*stp*0.5
-            *(derivOf(anchor+glA*stp)+derivOf(anchor+glB*stp));
-        expected = prev+delta;
+                // --- Step 4: advance phase ---
+                anchor = select2(trusted, matchedPos, (prevPhase:min(1-stp)));
+                newPhaseRaw = (anchor+stp)*active;
 
-        // --- Step 6: guarded landing ---
-        phaseDone = active&(newPhaseRaw>=(1-halfStep));
-        guardSize = abs(totalStep)*maxDB*invCS*stp;
-        landed = phaseDone&(abs(target-expected)<=guardSize);
+                // --- Step 5: curve increment (2-pt Gauss-Legendre); no brake fade ---
+                glA = 0.21132486540518713;
+                glB = 0.78867513459481287;
+                delta = totalStep*stp*0.5*(derivOf(anchor+glA*stp)+derivOf(anchor+glB*stp));
+                expected = prev+delta;
 
-        // --- Step 7: output ---
-        // Smoothed direction: clamp to [target, prev] (attack) or
-        // [prev, target] (release). The target side is the
-        // support-overshoot catcher; when it fires the output differs from
-        // expected, so the next sample velocity-matches. Opposite
-        // direction: jump to target in a single sample (instant).
-        //
-        // To restore env <= dry (the dropped limiter ceiling), give this
-        // function the delayed dry as a ceiling input and append
-        // :min(ceiling) to the attack branch below.
-        preClamp = select2(landed, expected, target);
-        movingVal = select2(isRel,
-            (preClamp:min(prev):max(target)),
-            (preClamp:max(prev):min(target)));
-        result = select2(moving, target, movingVal);
+                // --- Step 6: guarded landing ---
+                phaseDone = active&(newPhaseRaw>=(1-halfStep));
+                guardSize = abs(totalStep)*maxDB*invCS*stp;
+                landed = phaseDone&(abs(target-expected)<=guardSize);
 
-        // State resets on landing OR while passing through instantly
-        // (active = 0 zeroes totalStep and newPhaseRaw).
-        newPhase = newPhaseRaw*(1-phaseDone);
-        totalStepOut = totalStep*(1-phaseDone);
+                // --- Step 7: output ---
+                // Smoothed direction: clamp to [target, prev] (attack) or
+                // [prev, target] (release). The target side is the
+                // support-overshoot catcher; when it fires the output differs from
+                // expected, so the next sample velocity-matches. Opposite
+                // direction: jump to target in a single sample (instant).
+                //
+                // To restore env <= dry (the dropped limiter ceiling), give this
+                // function the delayed dry as a ceiling input and append
+                // :min(ceiling) to the attack branch below.
+                preClamp = select2(landed, expected, target);
+                movingVal = select2(isRel,
+                    (preClamp:min(prev):max(target)),
+                    (preClamp:max(prev):min(target)));
+                result = select2(moving, target, movingVal);
+
+                // State resets on landing OR while passing through instantly
+                // (active = 0 zeroes totalStep and newPhaseRaw).
+                newPhase = newPhaseRaw*(1-phaseDone);
+                totalStepOut = totalStep*(1-phaseDone);
+            };
     };
-};
 
-attackSmoother(x)  = dirSmoother(0, x);
+attackSmoother(x) = dirSmoother(0, x);
 releaseSmoother(x) = dirSmoother(1, x);
 
 // ============================================================================
