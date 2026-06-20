@@ -1,71 +1,73 @@
 declare name "shapedSmoother_split";
-declare version "0.15";
+declare version "0.16";
 declare author "Bart Brouns";
 declare license "AGPL-3.0-only";
 declare copyright "2026 - 2026, Bart Brouns";
 
 // ============================================================================
-//  shapedSmoother — attack and release as two independent followers, v0.15
+//  shapedSmoother — attack and release shaped followers, fused core, v0.16
 //
-//  Derived from shapedSmoother_core v0.14 by splitting the unified
-//  envelope state machine into two single-direction shaped followers
-//  that compose:
+//  Derived from shapedSmoother_core v0.14. One shared machine, coreSmoother,
+//  shapes a transition in either direction; the live direction selects the
+//  curve parameters and the transcendentals run once. Two specializations
+//  expose single-direction followers, and a both-directions instance is the
+//  limiter:
 //
-//      attackSmoother(x, ceiling)  — shapes DOWNWARD motion (attack
-//                           curve), passes upward motion through instantly.
-//      releaseSmoother(x, ceiling) — shapes UPWARD motion (release
-//                           curve), passes downward motion through instantly.
+//      attackSmoother(x, ceiling)  = coreSmoother(1, 0, ...)
+//                           shapes DOWNWARD motion (attack curve),
+//                           passes upward motion through instantly.
+//      releaseSmoother(x, ceiling) = coreSmoother(0, 1, ...)
+//                           shapes UPWARD motion (release curve),
+//                           passes downward motion through instantly.
+//      shapedSmoother              = coreSmoother(1, 1, ...) on slidingMin
+//                           shapes BOTH directions (the composition below).
 //
 //  `ceiling` clamps the output to <= ceiling (the env <= dry limiter
-//  guarantee, see RESTORED below); pass ma.INFINITY for an unclamped
-//  follower.
+//  guarantee, see RESTORED below); pass ma.INFINITY for no clamp.
 //
-//  Each is the v0.4 transition machine — trusted phase, velocity
+//  The core is the v0.4 transition machine — trusted phase, velocity
 //  matching, incremental/entry/support span, guarded landing, and the
-//  support-overshoot clamp — with the direction PINNED and the opposite
-//  direction passed through in a single sample. There is NO shared state
-//  between the two: they are genuinely independent and can be reordered,
-//  reused, or replaced separately.
+//  support-overshoot clamp. A direction flip re-anchors by velocity match;
+//  an inherited opposite-sign speed clamps that to a standstill (matchD = 0).
 //
-//  DROPPED relative to v0.14 (the price of independence):
+//  DROPPED relative to v0.14:
 //
-//    * THE BRAKE (v0.12-v0.14). A release no longer sees the upcoming
-//      attack, so it cannot decelerate into it. Release-to-attack flips
-//      therefore carry the inherited speed — the v0.4 velocity corner is
-//      back (the v0.14 notes measured 600-1300 such corners per minute on
-//      dense material, up to 77% of peak speed). brakeEnable is gone:
-//      this file IS the brake-off end of that dial, structurally.
+//    * THE BRAKE (v0.12-v0.14). Nothing decelerates a release into an
+//      oncoming attack, so release-to-attack flips carry the inherited
+//      speed and enter the attack from a standstill — the v0.4 velocity
+//      corner (the v0.14 notes measured 600-1300 such corners per minute on
+//      dense material). brakeEnable is gone: this file IS the brake-off end
+//      of that dial. C1 across a flip is not maintained.
 //
-//    * CROSS-DIRECTION VELOCITY MATCHING. Each follower velocity-matches
-//      only within its own direction. At a flip the downstream follower
-//      simply passes the upstream motion through; the new direction
-//      enters from a standstill, because an inherited opposite-sign speed
-//      clamps the velocity match to phase 0 (matchD = 0). C1 across a
-//      flip is not maintained — that was the brake's job.
-//
-//  PRESERVED: the shaped curves, per-direction velocity matching, the
-//  reach rule, guarded landing, float32 conditioning, and — through the
-//  slidingMin front-end in the shapedSmoother composition below —
-//  anticipatory attack at the SAME latency (att_samples). The dry delay
-//  realises the lookahead; the follower path adds none.
+//  PRESERVED: the shaped curves, velocity matching, the reach rule, guarded
+//  landing, float32 conditioning, and — through the slidingMin front-end in
+//  the composition — anticipatory attack at the SAME latency (att_samples).
+//  The dry delay realises the lookahead; the follower path adds none.
 //
 //  RESTORED: the limiter ceiling (envelope <= delayed dry input). v0.14's
-//  in-loop min(_, delayedX) is back as a `ceiling` argument on each
-//  follower, fed back so a biting clamp triggers velocity matching. The
-//  composition passes the delayed dry to the final (attack) stage and
-//  ma.INFINITY (no-op) to release. The per-target clamps (the support-
-//  overshoot catch) are kept regardless.
+//  in-loop min(_, delayedX) is back as a `ceiling` argument, fed back so a
+//  biting clamp triggers velocity matching. The composition passes the
+//  delayed dry as the ceiling. The per-target support-overshoot clamps are
+//  kept regardless.
 //
-//  CPU: two curve evaluations per sample instead of v0.14's shared one,
-//  i.e. 2 log + 2 atan + 2 sqrt where the unified machine had 1/1/1. That
-//  doubling is the unavoidable cost of two independent machines and is
-//  exactly what the shared-inversion work (v0.7) existed to avoid.
+//  CPU: ONE curve evaluation per sample — 1 log + 1 atan + 1 sqrt, the same
+//  as the unified v0.14 machine. The both-directions instance does NOT cost
+//  two: the direction selects the scalar parameters and the transcendentals
+//  run once (the shared-inversion idea from v0.7). Chaining two separate
+//  followers (slidingMin -> releaseSmoother -> attackSmoother) instead would
+//  evaluate two curves per sample — 2x. Verified against that chain: the
+//  fused core matches it to float epsilon on steps, transients, ducks and
+//  noise (where every handoff is at a standstill — the duck bottom, or a
+//  release->attack flip), and to within ~0.05 only on a sustained gradual
+//  ramp that reverses direction mid-glide, the one corner where a single
+//  velocity-matched machine and two chained machines part ways. On limiter
+//  material the two are interchangeable; the fused core is that chain,
+//  collapsed.
 //
-//  The composition at the bottom wires
-//      slidingMin(att) -> attackSmoother -> releaseSmoother
-//  reproducing the v0.4-family behaviour: anticipatory attack-shaped
-//  ducks, release-shaped recovery, with the flip corner the brake used to
-//  remove.
+//  The composition at the bottom is
+//      coreSmoother(1, 1) on slidingMin(att), ceiling = delayed dry
+//  giving anticipatory attack-shaped ducks and release-shaped recovery,
+//  with the flip corner the brake used to remove.
 // ============================================================================
 
 import("stdfaust.lib");
@@ -169,13 +171,21 @@ attackSupportRecip = 1/(attackMaxDerivBase*attackInvCurveScale*attStep);
 releaseSupportRecip = 1/(releaseMaxDerivBase*releaseInvCurveScale*relStep);
 
 // ============================================================================
-//  dirSmoother — one-directional shaped follower
+//  coreSmoother — shaped follower, one machine for both directions
 //
-//    isRel = 0 : ATTACK  — shapes downward motion, instant up.
-//    isRel = 1 : RELEASE — shapes upward motion, instant down.
+//    shapeDown : 1 = shape DOWNWARD motion (attack curve); 0 = instant down
+//    shapeUp   : 1 = shape UPWARD   motion (release curve); 0 = instant up
 //
-//  With isRel a literal, every select2(isRel, ...) below constant-folds,
-//  so each instance evaluates exactly one direction's curve.
+//  The live direction (prev > target moves down/attack, prev < target moves
+//  up/release) selects the SCALAR curve parameters, and the transcendentals
+//  are applied once to the selected scalars. So a both-directions instance
+//  (shapeDown = shapeUp = 1) costs ONE log + atan + sqrt per sample — the
+//  same as the unified machine, not two. A single-direction instance has
+//  isRel constant (folded):
+//
+//    attackSmoother  = coreSmoother(1, 0, ...)   shape down, instant up
+//    releaseSmoother = coreSmoother(0, 1, ...)   shape up,   instant down
+//    the limiter     = coreSmoother(1, 1, ...)   shape both  (shapedSmoother)
 //
 //  State carried between samples:
 //    prev          — current envelope value.
@@ -187,166 +197,181 @@ releaseSupportRecip = 1/(releaseMaxDerivBase*releaseInvCurveScale*relStep);
 //                    modified outside, so velocity-match instead of
 //                    trusting the stored phase.
 // ============================================================================
-dirSmoother(isRel, target, ceiling) = (target, ceiling):loop~si.bus(4):(_, !, !, !)
+coreSmoother(shapeDown, shapeUp, target, ceiling) = (target, ceiling) : loop ~ si.bus(4) : (_, !, !, !)
+with {
+    loop(prev, prevPhase, prevTotalStep, prevExpected, target, ceiling)
+        = result, newPhase, totalStepOut, expected
     with {
-        // Direction-fixed per-shape selections (constant-folded per instance).
-        shp = select2(isRel, attackShape, releaseShape);
-        invCS = select2(isRel, attackInvCurveScale, releaseInvCurveScale);
-        zeroV = select2(isRel, attackZero, releaseZero);
-        maxDB = select2(isRel, attackMaxDerivBase, releaseMaxDerivBase);
-        stp = select2(isRel, attStep, relStep);
+        prevSpeed = prev-prev';
+
+        // Per-sample direction. attacking/releasing gate on the shape mask
+        // and the rate, so a masked-off direction never "moves" — it passes
+        // through instantly (result clamp below).
+        attacking = (prev>target) & (att>0) & (shapeDown!=0);
+        releasing = (prev<target) & (rel>0) & (shapeUp!=0);
+        moving = attacking | releasing;
+        active = moving;
+
+        // Curve-parameter selector. Single-direction: the constant shapeUp
+        // (0 attack, 1 release), folded. Both-directions: the live direction.
+        dualMode = (shapeDown!=0) & (shapeUp!=0);
+        isRel = select2(dualMode, shapeUp, prev<target);
+
+        // Direction-selected scalars (select on slider-rate constants; the
+        // transcendentals below then run once on the chosen values).
+        shp       = select2(isRel, attackShape, releaseShape);
+        invCS     = select2(isRel, attackInvCurveScale, releaseInvCurveScale);
+        zeroV     = select2(isRel, attackZero, releaseZero);
+        maxDB     = select2(isRel, attackMaxDerivBase, releaseMaxDerivBase);
+        stp       = select2(isRel, attStep, relStep);
         suppRecip = select2(isRel, attackSupportRecip, releaseSupportRecip);
-        kV = select2(isRel, sqrt((1/attackShape)-1), sqrt((1/releaseShape)-1));
-        twoC = select2(isRel, 2*attackShape, 2*releaseShape);
+        kV        = select2(isRel, sqrt((1/attackShape)-1), sqrt((1/releaseShape)-1));
+        twoC      = select2(isRel, 2*attackShape, 2*releaseShape);
         oneMinusC = select2(isRel, 1-attackShape, 1-releaseShape);
-        rateOK = select2(isRel, att>0, rel>0);
-        halfStep = 0.5*stp;
+        halfStep  = 0.5*stp;
 
-        loop(prev, prevPhase, prevTotalStep, prevExpected, target, ceiling) = result, newPhase, totalStepOut, expected
-            with {
-                prevSpeed = prev-prev';
+        // --- Curve helpers (ONE direction's transcendentals per sample) ---
+        cbAt(p) = ((log(shp*xx*xx+oneMinusC)
+            +2*kV*atan(xx/kV)-2*xx)/twoC-zeroV)*invCS
+        with { xx = select2(isRel, 1-p, p); };
+        fdOf(p) = select2(isRel, 1-cbAt(p), cbAt(p));
+        derivOf(p) = derivativeBaseRelease(shp, select2(isRel, 1-p, p))*invCS;
 
-                // Smoothed direction active?  attack: prev>target ; release:
-                // prev<target. The opposite direction is the instant branch
-                // (result, below).
-                moving = select2(isRel, prev>target, prev<target)&rateOK;
-                active = moving;
+        // --- Step 1: totalStep (incremental; entry on restart; support) ---
+        // No brake: the target is the plain input. The support floor uses
+        // the SIGNED prevSpeed on BOTH sides (v0.4): an inherited
+        // opposite-sign speed must not inflate the span — velocity
+        // matching clamps such an entry to a standstill anyway, and the
+        // v0.12 two-sided floor only existed for the (now absent)
+        // turnaround.
+        incrementalTotalStep = prevTotalStep+(target-target');
+        entryTotalStep = target-prev;
+        supportTotalStep = prevSpeed*suppRecip;
+        totalStep = select2(isRel,
+            min(select2(prevTotalStep>=0, incrementalTotalStep, entryTotalStep),
+                supportTotalStep),
+            max(select2(prevTotalStep<=0, incrementalTotalStep, entryTotalStep),
+                supportTotalStep))*active;
 
-                // --- Curve helpers (one direction's transcendentals) ---
-                cbAt(p) = ((log(shp*xx*xx+oneMinusC)+2*kV*atan(xx/kV)-2*xx)/twoC-zeroV)*invCS
-                    with {
-                        xx = select2(isRel, 1-p, p);
-                    };
-                fdOf(p) = select2(isRel, 1-cbAt(p), cbAt(p));
-                derivOf(p) = derivativeBaseRelease(shp, select2(isRel, 1-p, p))*invCS;
+        // --- Step 2: trusted phase vs velocity matching ---
+        sameTarget = (target==target');
+        sameDirection = (attacking==attacking') & (releasing==releasing');
+        undisturbed = (prev==prevExpected);
+        trusted = sameTarget&sameDirection&undisturbed&(prevTotalStep!=0);
 
-                // --- Step 1: totalStep (incremental; entry on restart; support) ---
-                // No brake: the target is the plain input. The support floor uses
-                // the SIGNED prevSpeed on BOTH sides (v0.4): an inherited
-                // opposite-sign speed must not inflate the span — velocity
-                // matching clamps such an entry to a standstill anyway, and the
-                // v0.12 two-sided floor only existed for the (now absent)
-                // turnaround.
-                incrementalTotalStep = prevTotalStep+(target-target');
-                entryTotalStep = target-prev;
-                supportTotalStep = prevSpeed*suppRecip;
-                totalStep = select2(isRel,
-                    min(select2(prevTotalStep>=0, incrementalTotalStep, entryTotalStep),
-                        supportTotalStep),
-                    max(select2(prevTotalStep<=0, incrementalTotalStep, entryTotalStep),
-                        supportTotalStep))*active;
+        // --- Step 3: velocity matching (shared inversion, v0.7) ---
+        matchCorr = halfStep*(sameDirection&(prevTotalStep!=0));
+        speedRatio = prevSpeed/(totalStep*invCS*stp+(1-active)*1e-30);
 
-                // --- Step 2: trusted phase vs velocity matching ---
-                sameTarget = (target==target');
-                sameDirection = (moving==moving');
-                undisturbed = (prev==prevExpected);
-                trusted = sameTarget&sameDirection&undisturbed&(prevTotalStep!=0);
+        matchD = max(0, min(speedRatio, maxDB));
+        partD = inverseDerivativePart(shp, matchD);
+        denD = 2*(shp*matchD+1);
+        topReleaseD = (1+partD)/denD;
+        bottomReleaseD = (1-partD)/denD;
 
-                // --- Step 3: velocity matching (shared inversion, v0.7) ---
-                matchCorr = halfStep*(sameDirection&(prevTotalStep!=0));
-                speedRatio = prevSpeed/(totalStep*invCS*stp+(1-active)*1e-30);
+        lateAnchor = select2(isRel, 1-bottomReleaseD, topReleaseD)+matchCorr:min(1);
+        gonnaDo(phase) = (1-fdOf(phase))*totalStep;
+        projected = gonnaDo(lateAnchor)+prev;
+        gonnaMakeIt = projected>target;
 
-                matchD = max(0, min(speedRatio, maxDB));
-                partD = inverseDerivativePart(shp, matchD);
-                denD = 2*(shp*matchD+1);
-                topReleaseD = (1+partD)/denD;
-                bottomReleaseD = (1-partD)/denD;
+        // Reach rule (v0.4): pick the accelerating anchor unless the
+        // decelerating anchor still reaches the target (overshoot is
+        // clampable; stranding short arrives late).
+        forwardPos = select2(isRel,
+            select2(gonnaMakeIt, 1-bottomReleaseD, 1-topReleaseD),
+            select2(gonnaMakeIt, bottomReleaseD, topReleaseD))
+            +matchCorr:max(0):min(1-stp);
+        matchedPos = forwardPos;
 
-                lateAnchor = select2(isRel, 1-bottomReleaseD, topReleaseD)+matchCorr:min(1);
-                gonnaDo(phase) = (1-fdOf(phase))*totalStep;
-                projected = gonnaDo(lateAnchor)+prev;
-                gonnaMakeIt = projected>target;
+        // --- Step 4: advance phase ---
+        anchor = select2(trusted, matchedPos, (prevPhase:min(1-stp)));
+        newPhaseRaw = (anchor+stp)*active;
 
-                // Reach rule (v0.4): pick the accelerating anchor unless the
-                // decelerating anchor still reaches the target (overshoot is
-                // clampable; stranding short arrives late).
-                forwardPos = select2(isRel,
-                    select2(gonnaMakeIt, 1-bottomReleaseD, 1-topReleaseD),
-                    select2(gonnaMakeIt, bottomReleaseD, topReleaseD))+matchCorr:max(0):min(1-stp);
-                matchedPos = forwardPos;
+        // --- Step 5: curve increment (2-pt Gauss-Legendre); no brake fade ---
+        glA = 0.21132486540518713;
+        glB = 0.78867513459481287;
+        delta = totalStep*stp*0.5
+            *(derivOf(anchor+glA*stp)+derivOf(anchor+glB*stp));
+        expected = prev+delta;
 
-                // --- Step 4: advance phase ---
-                anchor = select2(trusted, matchedPos, (prevPhase:min(1-stp)));
-                newPhaseRaw = (anchor+stp)*active;
+        // --- Step 6: guarded landing ---
+        phaseDone = active&(newPhaseRaw>=(1-halfStep));
+        guardSize = abs(totalStep)*maxDB*invCS*stp;
+        landed = phaseDone&(abs(target-expected)<=guardSize);
 
-                // --- Step 5: curve increment (2-pt Gauss-Legendre); no brake fade ---
-                glA = 0.21132486540518713;
-                glB = 0.78867513459481287;
-                delta = totalStep*stp*0.5*(derivOf(anchor+glA*stp)+derivOf(anchor+glB*stp));
-                expected = prev+delta;
+        // --- Step 7: output ---
+        // Smoothed direction: clamp to [target, prev] (attack) or
+        // [prev, target] (release). The target side is the
+        // support-overshoot catcher; when it fires the output differs from
+        // expected, so the next sample velocity-matches. Opposite
+        // direction: jump to target in a single sample (instant).
+        //
+        // The final :min(ceiling) restores the v0.14 limiter guarantee
+        // (envelope <= delayed dry input). It is fed back as prev, so a
+        // biting ceiling disturbs the output and triggers velocity
+        // matching next sample, exactly like v0.14's in-loop min(_,
+        // delayedX). ceiling = ma.INFINITY makes it a no-op (the bare
+        // attackSmoother/releaseSmoother); the composition feeds the
+        // delayed dry to the final attack stage.
+        preClamp = select2(landed, expected, target);
+        movingVal = select2(isRel,
+            (preClamp:min(prev):max(target)),
+            (preClamp:max(prev):min(target)));
+        result = select2(moving, target, movingVal) : min(ceiling);
 
-                // --- Step 6: guarded landing ---
-                phaseDone = active&(newPhaseRaw>=(1-halfStep));
-                guardSize = abs(totalStep)*maxDB*invCS*stp;
-                landed = phaseDone&(abs(target-expected)<=guardSize);
-
-                // --- Step 7: output ---
-                // Smoothed direction: clamp to [target, prev] (attack) or
-                // [prev, target] (release). The target side is the
-                // support-overshoot catcher; when it fires the output differs from
-                // expected, so the next sample velocity-matches. Opposite
-                // direction: jump to target in a single sample (instant).
-                //
-                // The final :min(ceiling) restores the v0.14 limiter guarantee
-                // (envelope <= delayed dry input). It is fed back as prev, so a
-                // biting ceiling disturbs the output and triggers velocity
-                // matching next sample, exactly like v0.14's in-loop min(_,
-                // delayedX). ceiling = ma.INFINITY makes it a no-op (the bare
-                // attackSmoother/releaseSmoother); the composition feeds the
-                // delayed dry to the final attack stage.
-                preClamp = select2(landed, expected, target);
-                movingVal = select2(isRel,
-                    (preClamp:min(prev):max(target)),
-                    (preClamp:max(prev):min(target)));
-                result = select2(moving, target, movingVal):min(ceiling);
-
-                // State resets on landing OR while passing through instantly
-                // (active = 0 zeroes totalStep and newPhaseRaw).
-                newPhase = newPhaseRaw*(1-phaseDone);
-                totalStepOut = totalStep*(1-phaseDone);
-            };
+        // State resets on landing OR while passing through instantly
+        // (active = 0 zeroes totalStep and newPhaseRaw).
+        newPhase = newPhaseRaw*(1-phaseDone);
+        totalStepOut = totalStep*(1-phaseDone);
     };
+};
 
 // The two public followers. `ceiling` clamps the output to <= ceiling
 // (the env <= dry limiter guarantee), fed back so a biting clamp triggers
 // velocity matching next sample. For an unclamped follower pass
 // ceiling = ma.INFINITY.
-attackSmoother(x, ceiling) = dirSmoother(0, x, ceiling);
-releaseSmoother(x, ceiling) = dirSmoother(1, x, ceiling);
+// The two single-direction followers, as specializations of coreSmoother.
+// `ceiling` clamps the output to <= ceiling (the env <= dry limiter
+// guarantee), fed back so a biting clamp triggers velocity matching next
+// sample; pass ma.INFINITY for no clamp. With one shape flag off, isRel is
+// constant and the unused direction's curve folds away (1 transcendental).
+attackSmoother(x, ceiling)  = coreSmoother(1, 0, x, ceiling);
+releaseSmoother(x, ceiling) = coreSmoother(0, 1, x, ceiling);
 
 // ============================================================================
 //  COMPOSITION
 //
-//  Order: slidingMin -> releaseSmoother -> attackSmoother.
 //  slidingMin gives the anticipatory target (it drops the moment a new
 //  minimum enters the window, att_samples before the transient reaches the
-//  delayed dry). releaseSmoother passes that drop straight down and shapes
-//  the recovery; attackSmoother then shapes the duck onto the release-
-//  shaped signal and passes the recovery up. Latency = lookaheadSamples,
-//  spent on the dry delay, not the follower path.
+//  delayed dry). A single both-directions coreSmoother then shapes the duck
+//  DOWN onto it (attack curve) and the recovery UP off it (release curve).
+//  Latency = lookaheadSamples, spent on the dry delay, not the follower.
 //
-//  env <= dry: the final stage (attack) gets the delayed dry as its
-//  ceiling, so the envelope never exceeds the aligned input. The attack is
-//  the stage whose feedback must see this clamp, so it is the one given a
-//  finite ceiling; release runs unclamped (ma.INFINITY) since
-//  mn <= slidingMin <= delayedX already holds out of it. The ceiling
-//  therefore only bites on the attack's own corner cases, e.g. a
-//  release->attack flip where prev still sits above a freshly dropped dry.
+//  Why fused, not slidingMin -> releaseSmoother -> attackSmoother:
+//  two separate followers each evaluate their own curve every sample, and
+//  Faust computes both even though, here, only one direction is ever moving
+//  at a time (the duck completes before the recovery starts; a transient
+//  during a recovery flips release->attack from a standstill). That is a
+//  2x transcendental bill for almost no behavioural difference. The fused
+//  follower picks the live direction's parameters and evaluates the curve
+//  ONCE per sample, so it costs 1 log + atan + sqrt instead of 2 — and is
+//  equivalent to the release->attack chain to float epsilon wherever the
+//  handoff is at a standstill (the duck bottom at ~zero velocity; a
+//  release->attack flip, the v0.4 corner), i.e. on all transient/step/noise
+//  material. Only a sustained gradual ramp reversing mid-glide differs, and
+//  only slightly (~0.05). attackSmoother and
+//  releaseSmoother remain above for genuinely independent single-direction
+//  use; chaining them is the slow path.
 //
-//  (The stages are passed by full application rather than a bare ":" pipe:
-//  the attack's ceiling is the delayed dry, a signal that carries its own
-//  input, and Faust would fold that input into a partially-applied stage.)
-//
-//  Swap the order, drop a stage, or feed either follower a different
-//  target/ceiling — they are independent.
+//  env <= dry: the fused follower is given the delayed dry as its ceiling,
+//  so the envelope never exceeds the aligned input. It is fed back, so a
+//  biting clamp trips velocity matching next sample (the v0.14 guarantee).
 // ============================================================================
-shapedSmoother(x) = attackSmoother(b, dry)// ceiling = delayed dry  ->  env <= dry
-    with {
-        dry = x@lookaheadSamples;
-        mn = x:ba.slidingMin(int(att_samples)+1, 1+maxLookaheadSamples);
-        b = releaseSmoother(mn, ma.INFINITY);
-        // unclamped release of the look-ahead minimum
-    };
+shapedSmoother(x) = coreSmoother(1, 1, mn, dry)   // shape both directions, ceiling = delayed dry
+with {
+    dry = x @ lookaheadSamples;
+    mn  = x : ba.slidingMin(int(att_samples)+1, 1+maxLookaheadSamples);
+};
 
 process = testSignal<:(_@lookaheadSamples, shapedSmoother(_));
 
