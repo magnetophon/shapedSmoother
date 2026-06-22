@@ -1,0 +1,67 @@
+#+title: Plan
+
+* new att-rel
+** paralel sliding min, lookahead alligned (0@16, 2@14, 4@12, 8@8, 16@0)
+*** each gets: 
+**** a hermite interpolator
+**** a mult factor for that interpolator (0@16 is always **1, the rest ramp down from there, with a ramp amount determined by att & rel times and shape)
+***** each interpolation factor (L) is at the start of the ramp (16@0 = 1/16, 8@8 = 1/8, 4@12 = 1/4, etc)  
+***** when this particular lookahead changes dir, the interpolation amount (L) starts stepping up towards 1
+****** when the ramp is low, the hermite start is the prev dir and point, continiously updated
+****** when the ramp starts going up, sample and hold the start dir and point
+***** the mult factor is not the same thing as L: it is not dependent on the above dir change based ramp, only on the att/rel (and shape?)
+***** the mult factor can later be adapted to incorporate freq based info: more low freq level relative to high freq mean more mult weight for long times, more high freq gets more weight for short times
+**** the parrallel min (att) or max (rel) of all of these is the final gain
+
+
+* DJ-comp
+* release+relHold
+
+* not all combinations of rel+shape make it till the end of the phase, because they go up in gain too quick.
+* some
+** make 2D table or curvefitting (rel+relShape):  which number to multiply each gain step by so that we DO make it till the end of the phase
+*** if that doesnt work: make tabeles/fittings for: 
+- when to kick in
+- how long to take to lerp dir to 0 if no attack  100ms in future
+
+* crossfade from hold dir to 0 dir when an attack comes 100ms in future
+* actual attack+shape when attack 50ms in future
+* multiple atack shapes, each douple the size of the last and see which one hits the endstop.
+
+
+
+correction table:
+- in the first mode, automatically run the second after.
+- in the second mode: stop trying if the factor doesn't change
+- apply the fixed correction to the rest of the range (and iterate on that too)
+- get the user params as fn inputs for the smoother, 
+- make the index the native format
+ - maybe att 2 and 3 samples should get a workaround in the dsp, maybe a linear or sine fade?   
+- the 32 steps of att_shape should be in fader space, so before the shaper
+
+
+
+#!/usr/bin/env bash
+# Patch shapedSmoother_core.dsp: add linear fade bypass for very short attacks.
+# Run from the shapedSmoother directory:
+#   bash ~/Downloads/add_linear_fade.sh shapedSmoother_core.dsp
+set -euo pipefail
+dsp=${1:?usage: add_linear_fade.sh shapedSmoother_core.dsp}
+
+# Verify the target line exists
+if ! grep -qF 'delta = spd * stp * corrMult;' "$dsp"; then
+    echo "ERROR: could not find 'delta = spd * stp * corrMult;' in $dsp" >&2
+    exit 1
+fi
+
+# Replace the delta line with linear fade bypass
+sed -i '/delta = spd \* stp \* corrMult;/c\
+        shapedDelta = spd * stp * corrMult;\
+        useLinear = int(attSamp) < oc.overshootLINEAR_BELOW;\
+        linearDelta = (lhx - dx) * active * stp;\
+        delta = select2(useLinear, shapedDelta, linearDelta);' "$dsp"
+
+echo "Patched $dsp — added linear fade for att < overshootLINEAR_BELOW"
+
+
+
