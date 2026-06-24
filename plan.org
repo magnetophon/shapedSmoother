@@ -1,17 +1,45 @@
 #+title: Plan
 
+
+
 * new att-rel
-** paralel sliding min, lookahead alligned (0@16, 2@14, 4@12, 8@8, 16@0)
+** paralel sliding min, lookahead alligned (0@16, 1@ 15, 2@14, 4@12, 8@8, 16@0)
+*** each gets: 
+**** a hermite interpolator
+***** each interpolation factor (L) is at the first step of the ramp: N@(maxN-N) = 1/N  (16@0 = 1/16, 8@8 = 1/8, 4@12 = 1/4, etc)
+***** take the one that's deepest, at least on attack
+***** when a new one is deepest, the start point and velocity of the GR (global) gets held, as well as the end point and velocity (local) and we start the L ramp. 
+***** reset the rest of them to the first step of the ramp
+***** the end point is the local slidingMin value, and the end velocity is the diff between the raw GR sample that caused the slidingMin to decrease and the one before it.
+*** advanced,
+**** step 2
+***** combine the minimum bank like in slidingMin, this is the att/rel time and is part of the same hermite machinery
+***** only drive the interpolators with the blocks smaller than the att/rel and the combined blocks from above
+**** step 3
+***** each gets a ratio (user facing) & mult factor (internal plus optionally user facing), with a control for the longest and the shortest and the ones in between spaced according to their length
+***** limiter mode has the shortest at mult 1
+**** end velocity by using more lookahead (capped at 0 for the turnarounds ?)
+***** for that we need to detect the turnaround  
+
+**** alernative step 3
+***** a mult factor for that interpolator (0@16 is always **1, the rest ramp down from there, with a ramp amount determined by att & rel times and shape)
+
+* new att-rel
+** paralel sliding min, lookahead alligned (0@16, 1@ 15, 2@14, 4@12, 8@8, 16@0)
 *** each gets: 
 **** a hermite interpolator
 **** a mult factor for that interpolator (0@16 is always **1, the rest ramp down from there, with a ramp amount determined by att & rel times and shape)
 ***** each interpolation factor (L) is at the start of the ramp (16@0 = 1/16, 8@8 = 1/8, 4@12 = 1/4, etc)  
-***** when this particular lookahead changes dir, the interpolation amount (L) starts stepping up towards 1
-****** when the ramp is low, the hermite start is the prev dir and point, continiously updated
-****** when the ramp starts going up, sample and hold the start dir and point
-***** the mult factor is not the same thing as L: it is not dependent on the above dir change based ramp, only on the att/rel (and shape?)
+***** when this particular lookahead changes direction, the interpolation amount (L) starts stepping up towards 1
+****** when the ramp is low, the hermite start is the prev smoother velocity and point, continiously updated
+****** when the ramp starts going up, sample and hold the start velocity and point
+***** the mult factor is not the same thing as L: it is not dependent on the above direction change based ramp, only on the att/rel (and shape?)
 ***** the mult factor can later be adapted to incorporate freq based info: more low freq level relative to high freq mean more mult weight for long times, more high freq gets more weight for short times
+****** this freq weighting can be (partially, user defined amount) be complemented by a multiband dyn EQ
+****** this weighting can be informed by masking info: if the band that would have made it slow is masked, decrease its influence cause the distortion that (shorter att/rel) causes will be masked
 **** the parrallel min (att) or max (rel) of all of these is the final gain
+**** the end velocity of each hermite should depend on the previous smaller hermite somehow, so they know if the curve is convex or not, somehow?
+**** or maybe the end velocity should depend on the dif of the two sliding min sizes: it and it's neighbor
 
 
 * DJ-comp
