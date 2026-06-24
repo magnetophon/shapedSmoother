@@ -1,21 +1,27 @@
 import("stdfaust.lib");
 
+// ========================================================================
+//  multidetector : parallel sliding-min bank + combined variable reduce
+// ========================================================================
+
 // ---- user-defined controls ---------------------------------------------
-SR = 48000;
-// assumed runtime rate (compile-time, NOT ma.SR)
-minFreq = 23.5;
-// lowest freq the largest *single* block must span
-gainIsLinear = 1;
-// 1 = gains are linear, 0 = gains are in dB
+SR           = 48000;    // assumed runtime rate (compile-time, NOT ma.SR)
+minFreq      = 23.5;     // lowest freq the largest *single* block must span
+gainIsLinear = 1;        // 1 = gains are linear, 0 = gains are in dB
 
 // maxN = smallest power of two >= one cycle of minFreq (the -1e-9 stops an
 // exact power of two rounding up a needless octave).
 //   48000 / 23.5 = 2042.55 -> maxN = 2048  (single block reaches 23.4375 Hz)
-maxN = 1<<int(ceil(log(SR/minFreq)/log(2)-1e-9));
+maxN   = 1 << int(ceil(log(SR/minFreq)/log(2) - 1e-9));
+maxLen = 2*maxN - 1;     // longest combined window (samples)
 
-// variable window size, in samples, 1 .. 2*maxN-1 (drives both the taps and
-// the combined output). Any bounded int signal works here.
-n = int(hslider("size", maxN, 1, 2*maxN-1, 1));
+// Runtime window control, in Hz. n = samples for one full cycle of freq,
+// ceil()'d so the window is always *at least* a full cycle, then clamped to
+// [1, maxLen]. The slider floor SR/maxLen (~11.72 Hz) is the combined output's
+// deepest reach -- a full octave below minFreq, available only at runtime.
+//   high freq -> short window -> few samples ;  low freq -> long window.
+freq = hslider("freq[unit:Hz][scale:log]", minFreq, SR/maxLen, SR/2, 0.01);
+n    = int(min(maxLen, max(1, ceil(SR/freq))));
 
 process = slidingMinPar(n, maxN, gainIsLinear);
 slidingMinPar(n, maxN, lin) = slidingReducePar(min, n, maxN, lin);
@@ -59,39 +65,38 @@ slidingMinPar(n, maxN, lin) = slidingReducePar(min, n, maxN, lin);
 // shared trailing edge t-4094 ; system latency = maxLen-1 = 4094 samp.
 // A tap is disabled (-> unity) when its window is longer than n.
 // ========================================================================
-slidingReducePar(op, n, maxN, gainIsLinear) = sequentialOperatorParOut(nBits-1, op)<:parTaps, combined
-    with {
-        nBits = maxNrBits(maxN);
-        // # of blocks: 1,2,4,…,maxN
-        maxLen = (1<<nBits)-1;
-        // 2*maxN-1, longest combined window
-        disabledVal = select2(gainIsLinear, 0, 1);
-        // unity: 1 lin / 0 dB (see header)
+slidingReducePar(op, n, maxN, gainIsLinear) =
+    sequentialOperatorParOut(nBits-1, op) <: parTaps , combined
+with {
+    nBits       = maxNrBits(maxN);          // # of blocks: 1,2,4,…,maxN
+    maxLen      = (1 << nBits) - 1;          // 2*maxN-1, longest combined window
+    disabledVal = select2(gainIsLinear, 0, 1);  // unity: 1 lin / 0 dB (see header)
 
-        // single-window taps, aligned to the shared trailing edge; a tap longer
-        // than the current n is switched off to unity (the size-based useVal).
-        parTaps = par(i, nBits, _@(maxLen-pow2(i)):useValSize(i));
-        useValSize(i) = select2(pow2(i)<=n, disabledVal, _);
+    // single-window taps, aligned to the shared trailing edge; a tap longer
+    // than the current n is switched off to unity (the size-based useVal).
+    parTaps        = par(i, nBits, _ @ (maxLen - pow2(i)) : useValSize(i));
+    useValSize(i)  = select2(pow2(i) <= n, disabledVal, _);
 
-        // combined reduce: tile the blocks selected by the bits of n, then delay
-        // the whole result by (maxLen-n) so n=maxLen lands at 0 delay.
-        combined = par(i, nBits, _@sumOfPrevBlockSizes(i):useValBit(i)):parallelOp(op, nBits):_@(maxLen-n);
-        useValBit(i) = select2(isUsed(i), disabledVal, _);
-        // the original (bit) useVal
+    // combined reduce: tile the blocks selected by the bits of n, then delay
+    // the whole result by (maxLen-n) so n=maxLen lands at 0 delay.
+    combined       = par(i, nBits, _ @ sumOfPrevBlockSizes(i) : useValBit(i))
+                   : parallelOp(op, nBits)
+                   : _ @ (maxLen - n);
+    useValBit(i)   = select2(isUsed(i), disabledVal, _);   // the original (bit) useVal
 
-        // ---- shared helpers (from slidingReduce) ----
-        sequentialOperatorParOut(N, op) = seq(i, N, operator(i));
-        operator(i) = si.bus(i), (_<:_, op(_, _@pow2(i)));
+    // ---- shared helpers (from slidingReduce) ----
+    sequentialOperatorParOut(N, op) = seq(i, N, operator(i));
+    operator(i) = si.bus(i), (_ <: _ , op(_, _ @ pow2(i)));
 
-        sumOfPrevBlockSizes(0) = 0;
-        sumOfPrevBlockSizes(i) = ba.subseq(allBlockSizes, 0, i):>_;
-        allBlockSizes = par(i, maxNrBits(maxN-1), pow2(i)*isUsed(i));
-        isUsed(i) = ba.take(i+1, int2bin(n, maxLen));
+    sumOfPrevBlockSizes(0) = 0;
+    sumOfPrevBlockSizes(i) = ba.subseq(allBlockSizes, 0, i) :> _;
+    allBlockSizes          = par(i, maxNrBits(maxN-1), pow2(i) * isUsed(i));
+    isUsed(i)              = ba.take(i+1, int2bin(n, maxLen));
 
-        parallelOp(op, 1) = _;
-        parallelOp(op, N) = op(parallelOp(op, N-1), _);
+    parallelOp(op, 1) = _;
+    parallelOp(op, N) = op(parallelOp(op, N-1), _);
 
-        int2bin(x, m) = par(j, maxNrBits(m-1), int(floor(x/pow2(j)))%2);
-        maxNrBits(x) = int(floor(log(x)/log(2))+1);
-        pow2(i) = 1<<i;
-    };
+    int2bin(x, m)  = par(j, maxNrBits(m-1), int(floor(x / pow2(j))) % 2);
+    maxNrBits(x)   = int(floor(log(x)/log(2)) + 1);
+    pow2(i)        = 1 << i;
+};
